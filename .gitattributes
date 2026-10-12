@@ -1,0 +1,17 @@
+# Auto detect text files and perform LF normalization
+* text=auto
+
+# Web & Source Code: Enforce Unix line endings (LF) for cross-platform stability
+*.py text eol=lf
+*.html text eol=lf
+*.css text eol=lf
+*.js text eol=lf
+*.json text eol=lf
+
+# ATLAS Media Assets: Mark as binary so Git doesn't attempt to normalize or diff them
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.mp3 binary
+*.wav binary
+*.ico binary

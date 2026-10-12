@@ -1,0 +1,328 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ATLAS AI</title>
+    <style>
+        :root {
+            --bg: #0f1117;
+            --card-bg: rgba(26, 29, 38, 0.85);
+            --border: rgba(255, 255, 255, 0.08);
+            --accent: #6366f1;
+            --accent-hover: #4f46e5;
+            --screen-accent: #06b6d4;
+            --text-main: #f3f4f6;
+            --text-muted: #9ca3af;
+            --status-green: #10b981;
+            --status-amber: #f59e0b;
+            --status-red: #ef4444;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+        }
+
+        body {
+            background-color: var(--bg);
+            color: var(--text-main);
+            padding: 24px;
+            display: flex;
+            justify-content: center;
+            height: 100vh;
+            overflow: hidden;
+        }
+
+        .container {
+            width: 100%;
+            max-width: 650px;
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+            height: 100%;
+        }
+
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding-bottom: 8px;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .title {
+            font-size: 20px;
+            font-weight: 700;
+            background: linear-gradient(135deg, #a5b4fc, #6366f1);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .status-badge {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 13px;
+            background: rgba(255, 255, 255, 0.05);
+            padding: 6px 12px;
+            border-radius: 999px;
+            border: 1px solid var(--border);
+        }
+
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background-color: var(--status-green);
+            box-shadow: 0 0 8px var(--status-green);
+        }
+
+        .wake-pill {
+            font-size: 11px;
+            color: var(--text-muted);
+            text-align: center;
+        }
+
+            .wake-pill span {
+                color: #818cf8;
+                font-weight: 600;
+            }
+
+        .response-container {
+            flex: 1;
+            background: var(--card-bg);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 16px;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            backdrop-filter: blur(10px);
+        }
+
+        .response-label {
+            font-size: 12px;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            color: var(--text-muted);
+        }
+
+        .response-text {
+            font-size: 14px;
+            line-height: 1.6;
+            color: var(--text-main);
+            white-space: pre-wrap;
+            word-break: break-word;
+        }
+
+        .cursor {
+            display: inline-block;
+            width: 6px;
+            height: 14px;
+            background: var(--accent);
+            vertical-align: middle;
+            animation: blink 0.8s infinite;
+        }
+
+        @keyframes blink {
+            0%, 100% {
+                opacity: 1;
+            }
+
+            50% {
+                opacity: 0;
+            }
+        }
+
+        .input-card {
+            background: var(--card-bg);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 14px;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+
+        .input-box {
+            width: 100%;
+            background: rgba(15, 17, 23, 0.7);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            color: #fff;
+            padding: 12px;
+            font-size: 14px;
+            outline: none;
+            transition: border-color 0.2s;
+        }
+
+            .input-box:focus {
+                border-color: var(--accent);
+            }
+
+        .btn-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr auto;
+            gap: 8px;
+        }
+
+        .btn {
+            border: none;
+            padding: 10px 14px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-weight: 600;
+            font-size: 13px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 6px;
+            transition: all 0.2s;
+            color: #fff;
+        }
+
+            .btn:disabled {
+                opacity: 0.5;
+                cursor: not-allowed;
+            }
+
+        .btn-screen {
+            background: linear-gradient(135deg, #0891b2, #0284c7);
+        }
+
+            .btn-screen:hover:not(:disabled) {
+                filter: brightness(1.1);
+            }
+
+        .btn-chat {
+            background: linear-gradient(135deg, #6366f1, #4f46e5);
+        }
+
+            .btn-chat:hover:not(:disabled) {
+                filter: brightness(1.1);
+            }
+
+        .btn-mic {
+            background: rgba(255, 255, 255, 0.08);
+            border: 1px solid var(--border);
+            width: 44px;
+            padding: 0;
+            font-size: 18px;
+        }
+
+            .btn-mic:hover:not(:disabled) {
+                background: rgba(255, 255, 255, 0.15);
+            }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <div class="title">ATLAS System</div>
+            <div class="status-badge">
+                <div class="status-dot" id="statusDot"></div>
+                <span id="statusText">Ready</span>
+            </div>
+        </div>
+
+        <div class="wake-pill">
+            Wake word enabled: Say <span>"Atlas"</span> to talk, or <span>"Atlas, Explain Screen"</span> to inspect display.
+        </div>
+
+        <div class="response-container">
+            <div class="response-label">Assistant Output</div>
+            <div class="response-text" id="responseText">Type a query or say "Atlas" to begin...</div>
+        </div>
+
+        <div class="input-card">
+            <input type="text" id="mainInput" class="input-box" placeholder="Ask about your screen or type a question...">
+            <div class="btn-grid">
+                <button class="btn btn-screen" id="btnScreen" onclick="handleScreenAsk()">
+                    🖥️ Ask Screen
+                </button>
+                <button class="btn btn-chat" id="btnChat" onclick="handleNormalAsk()">
+                    💬 Normal Talk
+                </button>
+                <button class="btn btn-mic" id="btnMic" title="Voice Input" onclick="handleDirectVoice()">
+                    🎙️
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let isReceivingStream = false;
+
+        function setStatus(text, dotColor = "#10b981", disableButtons = false) {
+        document.getElementById('statusText').innerText = text;
+        const dot = document.getElementById('statusDot');
+        dot.style.backgroundColor = dotColor;
+        dot.style.boxShadow = `0 0 8px ${dotColor}`;
+
+        document.getElementById('btnScreen').disabled = disableButtons;
+        document.getElementById('btnChat').disabled = disableButtons;
+        document.getElementById('btnMic').disabled = disableButtons;
+        }
+
+        // Methods invoked from Python:
+        window.clearResponse = function() {
+        document.getElementById('responseText').innerHTML = '<span class="cursor"></span>';
+        };
+
+        window.appendChunk = function(text) {
+        const container = document.getElementById('responseText');
+        const cursor = container.querySelector('.cursor');
+        if (cursor) cursor.remove();
+
+        container.appendChild(document.createTextNode(text));
+
+        const newCursor = document.createElement('span');
+        newCursor.className = 'cursor';
+        container.appendChild(newCursor);
+
+        const parent = container.parentElement;
+        parent.scrollTop = parent.scrollHeight;
+        };
+
+        window.finalizeResponse = function() {
+        const container = document.getElementById('responseText');
+        const cursor = container.querySelector('.cursor');
+        if (cursor) cursor.remove();
+        };
+
+        window.updateInputBox = function(val) {
+        document.getElementById('mainInput').value = val;
+        };
+
+        // UI triggers
+        async function handleScreenAsk() {
+        const input = document.getElementById('mainInput');
+        const question = input.value.trim() || "Explain what is on the screen.";
+        setStatus("Inspecting screen...", "#06b6d4", true);
+        window.clearResponse();
+        await pywebview.api.ask_with_screen(question);
+        setStatus("Ready", "#10b981", false);
+        }
+
+        async function handleNormalAsk() {
+        const input = document.getElementById('mainInput');
+        const question = input.value.trim();
+        if (!question) return;
+        setStatus("Thinking...", "#f59e0b", true);
+        window.clearResponse();
+        await pywebview.api.ask_text_only(question);
+        setStatus("Ready", "#10b981", false);
+        }
+
+        async function handleDirectVoice() {
+        setStatus("Listening...", "#ef4444", true);
+        await pywebview.api.trigger_manual_voice();
+        setStatus("Ready", "#10b981", false);
+        }
+    </script>
+</body>
+</html>

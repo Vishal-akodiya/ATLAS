@@ -1,0 +1,19 @@
+# --- Screen Capture & Processing ---
+mss
+pillow
+
+# --- Web UI Framework ---
+pywebview
+
+# --- AI Models ---
+google-genai
+
+# --- Speech Recognition (Microphone) ---
+SpeechRecognition
+pyaudio
+
+# --- Text-to-Speech (Audio Output) ---
+pywin32
+
+# --- Security & Environment ---
+python-dotenv
