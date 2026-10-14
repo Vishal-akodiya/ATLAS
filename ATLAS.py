@@ -7,6 +7,9 @@ import mss
 import re
 import base64
 import subprocess
+import json
+import urllib.request
+import urllib.parse
 from datetime import datetime
 from PIL import Image
 import speech_recognition as sr
@@ -26,76 +29,113 @@ if not API_KEY:
 MODEL_ID = "gemini-3.1-flash-lite"
 client = genai.Client(api_key=API_KEY)
 
-# Thread-safe Speech Queue and Interruption Event
 speech_queue = queue.Queue()
 stop_speaking = threading.Event()
 
+# Global reference to push UI updates
+global_backend = None
+
 # ==========================================
-# ATLAS TOOL REGISTRY (Phase 1 & 2 Blueprint)
+# ATLAS TOOL REGISTRY & MEMORY
 # ==========================================
 WORKSPACE_DIR = os.path.join(os.getcwd(), "ATLAS_Workspace")
+TASKS_FILE = os.path.join(WORKSPACE_DIR, "tasks.json")
 os.makedirs(WORKSPACE_DIR, exist_ok=True)
 
+def _load_tasks():
+    if not os.path.exists(TASKS_FILE): return []
+    try:
+        with open(TASKS_FILE, 'r', encoding="utf-8") as f:
+            return json.load(f)
+    except:
+        return []
+
+def _save_tasks(tasks):
+    with open(TASKS_FILE, 'w', encoding="utf-8") as f:
+        json.dump(tasks, f, indent=4)
+        
+    # Instantly sync UI with the latest tasks
+    if global_backend and global_backend.window:
+        try:
+            active_tasks = [t for t in tasks if not t.get("notified")]
+            json_str = json.dumps(active_tasks)
+            b64_str = base64.b64encode(json_str.encode('utf-8')).decode('utf-8')
+            global_backend.window.evaluate_js(f"window.renderTasksFromBase64('{b64_str}')")
+        except Exception as e:
+            print(f"UI Sync Error: {e}")
+
+# --- Phase 1 & 2: Safe Local Tools ---
 def create_note(filename: str, content: str) -> str:
-    """Creates a text or markdown note in the user's workspace.
-    Args:
-        filename: The name of the file (e.g., 'meeting_notes.md', 'todo.txt').
-        content: The text content to save inside the note.
-    """
     safe_filename = "".join([c for c in filename if c.isalpha() or c.isdigit() or c in " ._-"]).rstrip()
     filepath = os.path.join(WORKSPACE_DIR, safe_filename)
-    
     try:
-        with open(filepath, "w", encoding="utf-8") as f:
-            f.write(content)
+        with open(filepath, "w", encoding="utf-8") as f: f.write(content)
         return f"SUCCESS: Note saved at {filepath}"
-    except Exception as e:
-        return f"FAILED: Could not save note. Error: {str(e)}"
+    except Exception as e: return f"FAILED: Error saving note - {str(e)}"
 
 def read_document(filename: str) -> str:
-    """Reads the content of an existing document in the user's workspace.
-    Args:
-        filename: The exact name of the file to read.
-    """
     filepath = os.path.join(WORKSPACE_DIR, filename)
-    if not os.path.exists(filepath):
-        return "FAILED: File does not exist in the workspace."
-    
+    if not os.path.exists(filepath): return "FAILED: File does not exist."
     try:
-        with open(filepath, "r", encoding="utf-8") as f:
-            return f.read()
-    except Exception as e:
-        return f"FAILED: Could not read file. Error: {str(e)}"
+        with open(filepath, "r", encoding="utf-8") as f: return f.read()
+    except Exception as e: return f"FAILED: Error reading file - {str(e)}"
+
+def search_files(keyword: str) -> str:
+    files = os.listdir(WORKSPACE_DIR)
+    matches = [f for f in files if keyword.lower() in f.lower() and os.path.isfile(os.path.join(WORKSPACE_DIR, f))]
+    if not matches: return f"No files found matching '{keyword}'."
+    return f"Found files: {', '.join(matches)}"
 
 def open_application(app_name: str) -> str:
-    """Opens an allowed system application.
-    Args:
-        app_name: The name of the app to open (e.g., 'notepad', 'calculator', 'browser').
-    """
-    app_name = app_name.lower()
-    # Level 1 Guardrail: App Allowlist
-    allowed_apps = {
-        "notepad": "notepad.exe",
-        "calculator": "calc.exe",
-        "browser": "start msedge"
-    }
-    
-    if app_name not in allowed_apps:
-        return f"FAILED: '{app_name}' is not in the approved application allowlist."
-        
+    allowed_apps = {"notepad": "notepad.exe", "calculator": "calc.exe", "browser": "start msedge"}
+    if app_name.lower() not in allowed_apps: return f"FAILED: '{app_name}' is not approved."
     try:
-        subprocess.Popen(allowed_apps[app_name], shell=True)
+        subprocess.Popen(allowed_apps[app_name.lower()], shell=True)
         return f"SUCCESS: Launched {app_name}."
-    except Exception as e:
-        return f"FAILED: Could not launch app. Error: {str(e)}"
+    except Exception as e: return f"FAILED: {str(e)}"
 
 def get_current_time() -> str:
-    """Gets the current local system time, day, and date."""
-    return datetime.now().strftime("%A, %B %d, %Y - %I:%M %p")
+    return datetime.now().strftime("%A, %B %d, %Y - %H:%M")
 
-# List of tools to pass to Gemini
-ATLAS_TOOLS = [create_note, read_document, open_application, get_current_time]
+# --- Phase 3: Tasks & Reminders ---
+def create_task(title: str, due_time_str: str) -> str:
+    try:
+        datetime.strptime(due_time_str, "%Y-%m-%d %H:%M")
+        tasks = _load_tasks()
+        task_id = max([t["id"] for t in tasks] + [0]) + 1
+        tasks.append({"id": task_id, "title": title, "due_time": due_time_str, "notified": False})
+        _save_tasks(tasks) # Triggers UI Update
+        return f"SUCCESS: Task #{task_id} scheduled for {due_time_str}."
+    except ValueError: return "FAILED: Invalid time format. Must be 'YYYY-MM-DD HH:MM'."
 
+def list_tasks() -> str:
+    tasks = [t for t in _load_tasks() if not t.get("notified")]
+    if not tasks: return "No pending tasks."
+    return "\n".join([f"ID {t['id']}: {t['title']} at {t['due_time']}" for t in tasks])
+
+def cancel_task(task_id: int) -> str:
+    tasks = _load_tasks()
+    for t in tasks:
+        if t["id"] == task_id:
+            t["notified"] = True
+            _save_tasks(tasks) # Triggers UI Update
+            return f"SUCCESS: Task {task_id} completed/cancelled."
+    return f"FAILED: Task ID {task_id} not found."
+
+def search_wikipedia(query: str) -> str:
+    try:
+        safe_query = urllib.parse.quote(query)
+        url = f"https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch={safe_query}&utf8=&format=json"
+        req = urllib.request.Request(url, headers={'User-Agent': 'ATLAS_AI/1.0'})
+        with urllib.request.urlopen(req) as response:
+            data = json.loads(response.read().decode())
+            results = data.get('query', {}).get('search', [])
+            if not results: return f"No results found for '{query}'."
+            clean_snippet = re.sub(r'<[^>]+>', '', results[0]['snippet'])
+            return f"Source: Wikipedia ({results[0]['title']})\nSummary: {clean_snippet}..."
+    except Exception as e: return f"FAILED: Web search error - {str(e)}"
+
+ATLAS_TOOLS = [create_note, read_document, search_files, open_application, get_current_time, create_task, list_tasks, cancel_task, search_wikipedia]
 
 def clean_for_speech(text):
     text = re.sub(r'```.*?```', '', text, flags=re.DOTALL) 
@@ -116,18 +156,14 @@ def tts_worker():
     voices = speaker.GetVoices()
     for i in range(voices.Count):
         desc = voices.Item(i).GetDescription().lower()
-        if "george" in desc:
-            george_voice = voices.Item(i)
-        elif "hemant" in desc:
-            hemant_voice = voices.Item(i)
-        elif "david" in desc:
-            default_voice = voices.Item(i)
+        if "george" in desc: george_voice = voices.Item(i)
+        elif "hemant" in desc: hemant_voice = voices.Item(i)
+        elif "david" in desc: default_voice = voices.Item(i)
 
     speaker.Voice = george_voice or default_voice or voices.Item(0)
 
     while True:
         text = speech_queue.get()
-        
         if text == "__STOP__":
             speaker.Speak("", 2) 
             speech_queue.task_done()
@@ -135,13 +171,9 @@ def tts_worker():
 
         if text and not stop_speaking.is_set():
             is_hindi = bool(re.search(r'[\u0900-\u097F]', text))
-            
-            if is_hindi and hemant_voice:
-                speaker.Voice = hemant_voice
-            elif not is_hindi and george_voice:
-                speaker.Voice = george_voice
-            elif not is_hindi and default_voice:
-                speaker.Voice = default_voice
+            if is_hindi and hemant_voice: speaker.Voice = hemant_voice
+            elif not is_hindi and george_voice: speaker.Voice = george_voice
+            elif not is_hindi and default_voice: speaker.Voice = default_voice
                 
             sentences = re.split(r'(?<=[.!?]) +', text)
             for sentence in sentences:
@@ -150,16 +182,39 @@ def tts_worker():
                     break 
                 if sentence.strip():
                     speaker.Speak(sentence.strip(), 1) 
-                    
                     while speaker.Status.RunningState == 2: 
                         if stop_speaking.is_set():
                             speaker.Speak("", 2) 
                             break
                         time.sleep(0.05)
-                        
         speech_queue.task_done()
 
 threading.Thread(target=tts_worker, daemon=True).start()
+
+def reminder_worker(backend):
+    while True:
+        time.sleep(15) 
+        tasks = _load_tasks()
+        changed = False
+        now = datetime.now()
+        
+        for t in tasks:
+            if not t.get("notified"):
+                try:
+                    due = datetime.strptime(t["due_time"], "%Y-%m-%d %H:%M")
+                    if now >= due:
+                        t["notified"] = True
+                        changed = True
+                        
+                        msg = f"🔔 **Reminder:** {t['title']}"
+                        if backend.window:
+                            backend.window.evaluate_js("window.createNewAssistantBubble()")
+                            backend.window.evaluate_js(f"window.appendChunk('{msg}')")
+                            backend.window.evaluate_js("window.finalizeResponse()")
+                            backend.speak(f"Reminder: {t['title']}")
+                except: pass 
+        if changed:
+            _save_tasks(tasks) # Triggers UI Update
 
 class AtlasBackend:
     def __init__(self):
@@ -172,26 +227,35 @@ class AtlasBackend:
         self._initialize_chat()
 
     def _initialize_chat(self):
-        """Creates the chat session equipped with the Tool Registry."""
         self.chat_session = client.chats.create(
             model=MODEL_ID,
             config=types.GenerateContentConfig(
                 system_instruction="""You are ATLAS, a personal AI desktop assistant. 
-                You have access to tools to interact with the user's system. 
-                If the user asks you to perform a task, use the appropriate tool. 
+                You have access to tools to interact with the user's system and memory. 
+                Before setting a reminder, ALWAYS check the current time. 
                 Always confirm what action you took in 1-2 concise sentences.""",
                 tools=ATLAS_TOOLS,
-                temperature=0.3 # Lower temperature for more reliable function calling
+                temperature=0.3
             )
         )
 
     def set_window(self, window):
         self.window = window
 
+    # --- UI Callable Endpoints for Tasks ---
+    def get_ui_tasks_b64(self):
+        """Called by UI on startup to get the initial list."""
+        active_tasks = [t for t in _load_tasks() if not t.get("notified")]
+        json_str = json.dumps(active_tasks)
+        return base64.b64encode(json_str.encode('utf-8')).decode('utf-8')
+
+    def ui_cancel_task(self, task_id):
+        """Called directly by the UI when the user clicks 'Done'."""
+        cancel_task(int(task_id))
+
     def stop_audio(self):
         stop_speaking.set()
-        with speech_queue.mutex:
-            speech_queue.queue.clear()
+        with speech_queue.mutex: speech_queue.queue.clear()
         speech_queue.put("__STOP__")
 
     def speak(self, text):
@@ -211,8 +275,7 @@ class AtlasBackend:
             native = self.window.native if self.window else None
             handle = getattr(native, "Handle", None)
             if handle: hwnd = wintypes.HWND(int(handle))
-        except Exception:
-            pass
+        except Exception: pass
             
         if not hwnd:
             user32.FindWindowW.argtypes = [wintypes.LPCWSTR, wintypes.LPCWSTR]
@@ -263,11 +326,8 @@ class AtlasBackend:
         return output_path
 
     def _execute_gemini(self, contents):
-        """Standard execution. Function calls resolve automatically via the SDK."""
         try:
             self.window.evaluate_js("window.createNewAssistantBubble()")
-            
-            # Using send_message instead of stream to safely handle auto-function calling execution
             response = self.chat_session.send_message(contents)
             
             if response.text:
@@ -342,7 +402,6 @@ class AtlasBackend:
             self.is_processing = False
             self.window.evaluate_js("setStatus('Ready', '#10b981', false)")
 
-
 def wake_word_listener(backend):
     r = sr.Recognizer()
     r.pause_threshold = 0.5 
@@ -397,6 +456,8 @@ def wake_word_listener(backend):
 
 if __name__ == '__main__':
     backend = AtlasBackend()
+    global_backend = backend # Bind for UI pushes
+    
     window = webview.create_window(
         'ATLAS AI Assistant',
         'ui/index.html',
@@ -406,5 +467,8 @@ if __name__ == '__main__':
         resizable=True
     )
     backend.set_window(window)
+    
     threading.Thread(target=wake_word_listener, args=(backend,), daemon=True).start()
+    threading.Thread(target=reminder_worker, args=(backend,), daemon=True).start()
+    
     webview.start()

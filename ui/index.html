@@ -4,7 +4,6 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>ATLAS AI</title>
-    <!-- Include Marked.js for Markdown parsing -->
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
     <style>
         :root {
@@ -37,6 +36,7 @@
             justify-content: center;
             height: 100vh;
             overflow: hidden;
+            position: relative;
         }
 
         .container {
@@ -46,6 +46,7 @@
             flex-direction: column;
             gap: 12px;
             height: 100%;
+            position: relative;
         }
 
         .header {
@@ -134,7 +135,6 @@
                 font-weight: 600;
             }
 
-        /* Chat History Stream Container */
         .chat-container {
             flex: 1;
             background: var(--card-bg);
@@ -186,7 +186,6 @@
             border-bottom-left-radius: 4px;
         }
 
-            /* Markdown Styles within Assistant Bubble */
             .msg-assistant p {
                 margin-bottom: 8px;
             }
@@ -346,6 +345,96 @@
                 background: rgba(239, 68, 68, 0.4);
                 color: white;
             }
+
+        /* --- Task Manager UI --- */
+        .task-panel {
+            position: absolute;
+            top: 45px;
+            right: 0;
+            width: 320px;
+            max-height: 400px;
+            background: rgba(20, 23, 33, 0.95);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            backdrop-filter: blur(15px);
+            display: none;
+            flex-direction: column;
+            z-index: 100;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.6);
+        }
+
+            .task-panel.show {
+                display: flex;
+                animation: fadeIn 0.2s ease;
+            }
+
+        .task-header {
+            padding: 12px 16px;
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-weight: 600;
+            font-size: 14px;
+        }
+
+        .task-list-ui {
+            padding: 12px;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            max-height: 340px;
+        }
+
+        .task-item {
+            background: rgba(255,255,255,0.03);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 12px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .task-info {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+
+        .task-title {
+            font-size: 13px;
+            font-weight: 500;
+        }
+
+        .task-time {
+            font-size: 11px;
+            color: var(--screen-accent);
+        }
+
+        .task-empty {
+            text-align: center;
+            font-size: 12px;
+            color: var(--text-muted);
+            padding: 20px 0;
+        }
+
+        .btn-check {
+            background: rgba(16, 185, 129, 0.1);
+            border: 1px solid var(--status-green);
+            color: var(--status-green);
+            border-radius: 6px;
+            padding: 4px 8px;
+            cursor: pointer;
+            transition: 0.2s;
+            font-size: 11px;
+        }
+
+            .btn-check:hover {
+                background: var(--status-green);
+                color: white;
+            }
     </style>
 </head>
 <body>
@@ -355,29 +444,34 @@
                 <div class="title">ATLAS System</div>
                 <div class="status-badge">
                     <div class="visualizer" id="audioVisualizer">
-                        <div class="bar"></div>
-                        <div class="bar"></div>
-                        <div class="bar"></div>
-                        <div class="bar"></div>
-                        <div class="bar"></div>
+                        <div class="bar"></div><div class="bar"></div><div class="bar"></div><div class="bar"></div><div class="bar"></div>
                     </div>
                     <span id="statusText" style="font-weight: 600;">Ready</span>
                 </div>
             </div>
             <div class="header-controls">
+                <!-- Task Manager Toggle -->
+                <button class="icon-btn" id="btnTasks" onclick="toggleTaskPanel()" title="Manage Tasks">📋 Tasks <span id="taskCount"></span></button>
                 <button class="icon-btn" id="btnPin" onclick="togglePin()" title="Toggle Always on Top">📌</button>
-                <button class="icon-btn" onclick="clearChat()" title="Clear Conversation">🧹 Clear</button>
+                <button class="icon-btn" onclick="clearChat()" title="Clear Conversation">🧹</button>
             </div>
         </div>
 
-        <div class="wake-pill">
-            Wake word active: <span>"Atlas"</span> or <span>"Atlas, Explain Screen"</span>
+        <!-- Task Manager Overlay Panel -->
+        <div class="task-panel" id="taskPanel">
+            <div class="task-header">
+                <span>Active Tasks & Reminders</span>
+                <button class="icon-btn" onclick="toggleTaskPanel()">❌</button>
+            </div>
+            <div class="task-list-ui" id="taskListUI">
+                <div class="task-empty">No active tasks.</div>
+            </div>
         </div>
+
+        <div class="wake-pill">Wake word active: <span>"Atlas"</span> or <span>"Atlas, Explain Screen"</span></div>
 
         <div class="chat-container" id="chatContainer">
-            <div class="message msg-assistant">
-                <p>System initialized. Type a query, use the buttons below, or say "Atlas" to begin.</p>
-            </div>
+            <div class="message msg-assistant"><p>System initialized. Type a query, use the buttons below, or say "Atlas" to begin.</p></div>
         </div>
 
         <div class="input-card">
@@ -400,11 +494,53 @@
         let currentRawText = "";
         let isPinned = false;
 
+        // --- Task Management Logic ---
+        function toggleTaskPanel() {
+        document.getElementById('taskPanel').classList.toggle('show');
+        }
+
+        // Called from Python when tasks are saved/updated
+        window.renderTasksFromBase64 = function(b64Data) {
+        try {
+        // Decode base64 to avoid JSON quote escaping issues
+        const jsonStr = decodeURIComponent(escape(window.atob(b64Data)));
+        const tasks = JSON.parse(jsonStr);
+
+        const taskListUI = document.getElementById('taskListUI');
+        const taskCount = document.getElementById('taskCount');
+
+        taskListUI.innerHTML = "";
+
+        if (tasks.length === 0) {
+        taskListUI.innerHTML = '<div class="task-empty">No active tasks.</div>';
+        taskCount.innerText = "";
+        } else {
+        taskCount.innerText = `(${tasks.length})`;
+        tasks.forEach(task => {
+        const item = document.createElement('div');
+        item.className = 'task-item';
+        item.innerHTML = `
+        <div class="task-info">
+        <span class="task-title">${task.title}</span>
+        <span class="task-time">🕒 ${task.due_time}</span>
+        </div>
+        <button class="btn-check" onclick="completeTask(${task.id})">✔ Done</button>
+        `;
+        taskListUI.appendChild(item);
+        });
+        }
+        } catch(e) { console.error("Error rendering tasks:", e); }
+        };
+
+        async function completeTask(taskId) {
+        // Tell backend to cancel/complete the task
+        await pywebview.api.ui_cancel_task(taskId);
+        }
+
+        // --- Standard Chat Logic ---
         function setStatus(text, textColor = "#10b981", disableButtons = false) {
         const statusNode = document.getElementById('statusText');
-        statusNode.innerText = text;
-        statusNode.style.color = textColor;
-
+        statusNode.innerText = text; statusNode.style.color = textColor;
         document.getElementById('btnScreen').disabled = disableButtons;
         document.getElementById('btnChat').disabled = disableButtons;
         document.getElementById('btnMic').disabled = disableButtons;
@@ -418,10 +554,8 @@
         window.addUserBubble = function(text) {
         const chat = document.getElementById('chatContainer');
         const bubble = document.createElement('div');
-        bubble.className = 'message msg-user';
-        bubble.innerText = text;
-        chat.appendChild(bubble);
-        scrollToBottom();
+        bubble.className = 'message msg-user'; bubble.innerText = text;
+        chat.appendChild(bubble); scrollToBottom();
         };
 
         window.createNewAssistantBubble = function() {
@@ -430,51 +564,35 @@
         currentAssistantBubble.className = 'message msg-assistant';
         currentAssistantBubble.innerHTML = '<span class="cursor"></span>';
         chat.appendChild(currentAssistantBubble);
-        currentRawText = "";
-        scrollToBottom();
+        currentRawText = ""; scrollToBottom();
         };
 
         window.appendChunk = function(text) {
         if (!currentAssistantBubble) window.createNewAssistantBubble();
         currentRawText += text;
-
-        // While streaming, display raw text to prevent markdown parsing glitches on partial tags
         currentAssistantBubble.innerHTML = currentRawText.replace(/\n/g, '<br>') + '<span class="cursor"></span>';
         scrollToBottom();
         };
 
         window.finalizeResponse = function() {
         if (currentAssistantBubble) {
-        // Parse markdown once generation is complete
         currentAssistantBubble.innerHTML = marked.parse(currentRawText);
-        currentAssistantBubble = null;
-        currentRawText = "";
+        currentAssistantBubble = null; currentRawText = "";
         }
         scrollToBottom();
         };
 
-        window.updateInputBox = function(val) {
-        document.getElementById('mainInput').value = val;
-        };
+        window.updateInputBox = function(val) { document.getElementById('mainInput').value = val; };
 
         window.showImagePreview = function(base64Data) {
         const container = document.getElementById('previewContainer');
         const img = document.getElementById('previewImg');
-        img.src = base64Data;
-        container.style.display = 'flex';
-
-        // Auto hide after 5 seconds
-        setTimeout(() => {
-        container.style.display = 'none';
-        img.src = '';
-        }, 5000);
+        img.src = base64Data; container.style.display = 'flex';
+        setTimeout(() => { container.style.display = 'none'; img.src = ''; }, 5000);
         };
 
         window.wipeChatUI = function() {
-        document.getElementById('chatContainer').innerHTML = `
-        <div class="message msg-assistant">
-        <p>Conversation cleared. Memory reset.</p>
-        </div>`;
+        document.getElementById('chatContainer').innerHTML = `<div class="message msg-assistant"><p>Conversation cleared. Memory reset.</p></div>`;
         };
 
         async function handleScreenAsk() {
@@ -482,7 +600,6 @@
         const question = input.value.trim() || "Explain what is on the screen.";
         window.addUserBubble("🖥️ [Screen Request]: " + question);
         input.value = "";
-
         setStatus("Capturing & Thinking...", "#06b6d4", true);
         await pywebview.api.ask_with_screen(question);
         setStatus("Ready", "#10b981", false);
@@ -492,67 +609,36 @@
         const input = document.getElementById('mainInput');
         const question = input.value.trim();
         if (!question) return;
-
         window.addUserBubble(question);
         input.value = "";
-
         setStatus("Thinking...", "#f59e0b", true);
         await pywebview.api.ask_text_only(question);
         setStatus("Ready", "#10b981", false);
         }
 
-        function handleEnter(e) {
-        if (e.key === 'Enter') handleNormalAsk();
-        }
+        function handleEnter(e) { if (e.key === 'Enter') handleNormalAsk(); }
+        async function handleDirectVoice() { setStatus("Listening...", "#ef4444", true); await pywebview.api.trigger_manual_voice(); }
+        async function handleStopAudio() { await pywebview.api.stop_audio(); setStatus("Ready", "#10b981", false); }
 
-        async function handleDirectVoice() {
-        setStatus("Listening...", "#ef4444", true);
-        await pywebview.api.trigger_manual_voice();
-        }
-
-        async function handleStopAudio() {
-        await pywebview.api.stop_audio();
-        setStatus("Ready", "#10b981", false);
-        }
-
-        
         async function togglePin() {
-            const btn = document.getElementById('btnPin');
-        
-            try {
-                const requestedState = !isPinned;
-                const success = await pywebview.api.toggle_pin(requestedState);
-        
-                if (success) {
-                    isPinned = requestedState;
-                } else {
-                    isPinned = false;
-                    console.error("Windows could not confirm the requested pin state.");
-                }
-        
-                btn.classList.toggle('active', isPinned);
-            } catch (error) {
-                console.error("Always-on-top error:", error);
-            }
+        const btn = document.getElementById('btnPin');
+        try {
+        const requestedState = !isPinned;
+        const success = await pywebview.api.toggle_pin(requestedState);
+        if (success) { isPinned = requestedState; }
+        else { isPinned = false; console.error("Windows could not confirm the requested pin state."); }
+        btn.classList.toggle('active', isPinned);
+        } catch (error) { console.error("Always-on-top error:", error); }
         }
 
+        async function clearChat() { await pywebview.api.clear_chat(); window.wipeChatUI(); }
 
-        async function clearChat() {
-        await pywebview.api.clear_chat();
-        window.wipeChatUI();
-        }
-
-        // --- Hardware-Driven Audio Visualizer ---
         async function initMicVisualizer() {
         try {
         const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
         const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-        const analyser = audioCtx.createAnalyser();
-        analyser.fftSize = 64;
-
-        const source = audioCtx.createMediaStreamSource(stream);
-        source.connect(analyser);
-
+        const analyser = audioCtx.createAnalyser(); analyser.fftSize = 64;
+        const source = audioCtx.createMediaStreamSource(stream); source.connect(analyser);
         const dataArray = new Uint8Array(analyser.frequencyBinCount);
         const bars = document.querySelectorAll('.bar');
 
@@ -563,7 +649,6 @@
         const val = dataArray[indexes[i]];
         const height = 3 + (val / 255) * 11;
         bars[i].style.height = height + 'px';
-
         if (val > 180) bars[i].style.backgroundColor = 'var(--status-red)';
         else if (val > 100) bars[i].style.backgroundColor = 'var(--status-amber)';
         else bars[i].style.backgroundColor = 'var(--status-green)';
@@ -571,12 +656,15 @@
         requestAnimationFrame(updateBars);
         }
         updateBars();
-        } catch (err) {
-        console.error("Microphone access denied.", err);
-        }
+        } catch (err) { console.error("Microphone access denied.", err); }
         }
 
-        window.addEventListener('load', initMicVisualizer);
+        window.addEventListener('load', async () => {
+        initMicVisualizer();
+        // Fetch initial tasks from backend on load
+        const initialTasksB64 = await pywebview.api.get_ui_tasks_b64();
+        if (initialTasksB64) window.renderTasksFromBase64(initialTasksB64);
+        });
     </script>
 </body>
 </html>
