@@ -35,45 +35,64 @@ def clean_for_speech(text):
     return text.strip()
 
 def tts_worker():
-    """Background worker using native Windows SAPI5 to bypass pyttsx3 crashes."""
+    """Background worker using native Windows SAPI5 with bilingual voice switching."""
     pythoncom.CoInitialize()
     speaker = win32com.client.Dispatch("SAPI.SpVoice")
     
-    # TITAN VOICE: Rate ranges from -10 to 10. -2 creates a deep, methodical sound.
-    speaker.Rate = -2 
+    # Reset rate to 0 as natural voices (George/Hemant) sound distorted at -2
+    speaker.Rate = 0 
     speaker.Volume = 100
     
-    # Force a male voice if available (Looks for Microsoft David)
+    # Store references for language switching
+    george_voice = None
+    hemant_voice = None
+    default_voice = None
+
+    # Scan installed Windows voices
     voices = speaker.GetVoices()
     for i in range(voices.Count):
-        voice = voices.Item(i)
-        if "david" in voice.GetDescription().lower() or "male" in voice.GetDescription().lower():
-            speaker.Voice = voice
-            break
+        desc = voices.Item(i).GetDescription().lower()
+        if "george" in desc:
+            george_voice = voices.Item(i)
+        elif "hemant" in desc:
+            hemant_voice = voices.Item(i)
+        elif "david" in desc:
+            default_voice = voices.Item(i)
+
+    # Set default fallback
+    speaker.Voice = george_voice or default_voice or voices.Item(0)
 
     while True:
         text = speech_queue.get()
         
         if text == "__STOP__":
-            # 2 = SVSFPurgeBeforeSpeak (Instantly cuts off current speech)
             speaker.Speak("", 2) 
             speech_queue.task_done()
             continue
 
         if text and not stop_speaking.is_set():
+            # Language Detection: Check if response contains Hindi (Devanagari script)
+            is_hindi = bool(re.search(r'[\u0900-\u097F]', text))
+            
+            # Switch voice dynamically based on detected text
+            if is_hindi and hemant_voice:
+                speaker.Voice = hemant_voice
+            elif not is_hindi and george_voice:
+                speaker.Voice = george_voice
+            elif not is_hindi and default_voice:
+                speaker.Voice = default_voice
+                
             sentences = re.split(r'(?<=[.!?]) +', text)
             for sentence in sentences:
                 if stop_speaking.is_set():
                     speaker.Speak("", 2) 
                     break 
                 if sentence.strip():
-                    # 1 = SVSFlagsAsync (Speak asynchronously so we can monitor for interruptions)
                     speaker.Speak(sentence.strip(), 1) 
                     
-                    # Loop while speaking to check for instant interruption
                     while speaker.Status.RunningState == 2: 
                         if stop_speaking.is_set():
-                            speaker.Speak("", 2) # Instantly cut off audio mid-word
+                            speaker.Speak("", 2) 
                             break
                         time.sleep(0.05)
                         
@@ -85,7 +104,11 @@ class AtlasBackend:
     def __init__(self):
         self.window = None
         self.recognizer = sr.Recognizer()
-        self.recognizer.pause_threshold = 1.5
+        
+        # Flawless talking parameters: Cut off almost instantly when you stop speaking
+        self.recognizer.pause_threshold = 0.5 
+        self.recognizer.non_speaking_duration = 0.4
+        
         self.is_processing = False
         
         # Initialize persistent memory and system instructions
@@ -172,9 +195,12 @@ class AtlasBackend:
         
         try:
             with sr.Microphone() as source:
-                self.recognizer.adjust_for_ambient_noise(source, duration=0.5)
-                audio = self.recognizer.listen(source, timeout=5, phrase_time_limit=15) 
+                self.recognizer.pause_threshold = 0.5
+                self.recognizer.non_speaking_duration = 0.3
+                self.recognizer.adjust_for_ambient_noise(source, duration=0.3)
+                audio = self.recognizer.listen(source, timeout=5, phrase_time_limit=12) 
                 
+            # Immediately show transition as soon as microphone releases
             self.window.evaluate_js("setStatus('Transcribing...', '#f59e0b', true)")
             transcript = self.recognizer.recognize_google(audio)
 
@@ -201,16 +227,17 @@ class AtlasBackend:
 def wake_word_listener(backend):
     """Background thread listening for 'Atlas' with continuous audio streaming."""
     r = sr.Recognizer()
-    r.pause_threshold = 0.6 
-    r.energy_threshold = 400
-    r.dynamic_energy_threshold = True
+    r.pause_threshold = 0.5 
+    r.non_speaking_duration = 0.3
+    r.energy_threshold = 300
+    r.dynamic_energy_threshold = False
 
     with sr.Microphone() as source:
         r.adjust_for_ambient_noise(source, duration=1.0)
         
         while True:
             try:
-                audio = r.listen(source, phrase_time_limit=8)
+                audio = r.listen(source, phrase_time_limit=5)
                 
                 if backend.is_processing:
                     continue
@@ -224,15 +251,21 @@ def wake_word_listener(backend):
                     
                     backend.is_processing = True 
                     try:
-                        backend.window.evaluate_js("setStatus('Atlas detected! Listening...', '#ef4444', true)")
-                        
                         command = phrase.replace("atlas", "").strip()
                         
                         if not command:
-                            r.pause_threshold = 1.5 
+                            # 1. Show listening state immediately
+                            backend.window.evaluate_js("setStatus('Atlas detected! Listening...', '#ef4444', true)")
+                            
+                            # 2. Fast cut-off for the actual command (0.5s silence instead of 1.5s)
+                            r.pause_threshold = 0.5 
+                            r.non_speaking_duration = 0.3
                             cmd_audio = r.listen(source, timeout=4, phrase_time_limit=10)
+                            
+                            # 3. Transition UI immediately when you stop speaking, BEFORE network call
+                            backend.window.evaluate_js("setStatus('Processing voice...', '#f59e0b', true)")
+                            
                             command = r.recognize_google(cmd_audio).lower()
-                            r.pause_threshold = 0.6 
 
                         if command:
                             safe_cmd = command.replace("'", "\\'")

@@ -72,12 +72,19 @@
             border: 1px solid var(--border);
         }
 
-        .status-dot {
-            width: 8px;
-            height: 8px;
-            border-radius: 50%;
+        .visualizer {
+            display: flex;
+            align-items: center;
+            gap: 3px;
+            height: 16px;
+        }
+
+        .bar {
+            width: 3px;
             background-color: var(--status-green);
-            box-shadow: 0 0 8px var(--status-green);
+            border-radius: 2px;
+            height: 3px;
+            transition: height 0.05s ease, background-color 0.2s;
         }
 
         .wake-pill {
@@ -224,8 +231,14 @@
         <div class="header">
             <div class="title">ATLAS System</div>
             <div class="status-badge">
-                <div class="status-dot" id="statusDot"></div>
-                <span id="statusText">Ready</span>
+                <div class="visualizer" id="audioVisualizer">
+                    <div class="bar"></div>
+                    <div class="bar"></div>
+                    <div class="bar"></div>
+                    <div class="bar"></div>
+                    <div class="bar"></div>
+                </div>
+                <span id="statusText" style="font-weight: 600;">Ready</span>
             </div>
         </div>
 
@@ -255,20 +268,16 @@
     </div>
 
     <script>
-        let isReceivingStream = false;
-
-        function setStatus(text, dotColor = "#10b981", disableButtons = false) {
-        document.getElementById('statusText').innerText = text;
-        const dot = document.getElementById('statusDot');
-        dot.style.backgroundColor = dotColor;
-        dot.style.boxShadow = `0 0 8px ${dotColor}`;
+        function setStatus(text, textColor = "#10b981", disableButtons = false) {
+        const statusNode = document.getElementById('statusText');
+        statusNode.innerText = text;
+        statusNode.style.color = textColor;
 
         document.getElementById('btnScreen').disabled = disableButtons;
         document.getElementById('btnChat').disabled = disableButtons;
         document.getElementById('btnMic').disabled = disableButtons;
         }
 
-        // Methods invoked from Python:
         window.clearResponse = function() {
         document.getElementById('responseText').innerHTML = '<span class="cursor"></span>';
         };
@@ -298,7 +307,6 @@
         document.getElementById('mainInput').value = val;
         };
 
-        // UI triggers
         async function handleScreenAsk() {
         const input = document.getElementById('mainInput');
         const question = input.value.trim() || "Explain what is on the screen.";
@@ -323,6 +331,53 @@
         await pywebview.api.trigger_manual_voice();
         setStatus("Ready", "#10b981", false);
         }
+
+        // --- Hardware-Driven Audio Visualizer ---
+        async function initMicVisualizer() {
+        try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+        const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        const analyser = audioCtx.createAnalyser();
+        analyser.fftSize = 64;
+
+        const source = audioCtx.createMediaStreamSource(stream);
+        source.connect(analyser);
+
+        const dataArray = new Uint8Array(analyser.frequencyBinCount);
+        const bars = document.querySelectorAll('.bar');
+
+        function updateBars() {
+        analyser.getByteFrequencyData(dataArray);
+
+        const indexes = [2, 4, 6, 8, 10];
+
+        for (let i = 0; i < bars.length; i++) {
+        const val = dataArray[indexes[i]];
+        const height = 3 + (val / 255) * 13;
+        bars[i].style.height = height + 'px';
+
+        if (val > 180) {
+        bars[i].style.backgroundColor = 'var(--status-red)';
+        } else if (val > 100) {
+        bars[i].style.backgroundColor = 'var(--status-amber)';
+        } else {
+        bars[i].style.backgroundColor = 'var(--status-green)';
+        }
+        }
+        requestAnimationFrame(updateBars);
+        }
+        updateBars();
+        } catch (err) {
+        console.error("Microphone access denied for visualizer.", err);
+        const bars = document.querySelectorAll('.bar');
+        bars.forEach(bar => {
+        bar.style.height = '3px';
+        bar.style.backgroundColor = 'var(--text-muted)';
+        });
+        }
+        }
+
+        window.addEventListener('load', initMicVisualizer);
     </script>
 </body>
 </html>
