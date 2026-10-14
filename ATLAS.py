@@ -10,6 +10,7 @@ import speech_recognition as sr
 import win32com.client
 import pythoncom
 from google import genai
+from google.genai import types
 from dotenv import load_dotenv
 
 # Load variables from .env
@@ -86,6 +87,14 @@ class AtlasBackend:
         self.recognizer = sr.Recognizer()
         self.recognizer.pause_threshold = 1.5
         self.is_processing = False
+        
+        # Initialize persistent memory and system instructions
+        self.chat_session = client.chats.create(
+            model=MODEL_ID,
+            config=types.GenerateContentConfig(
+                system_instruction="Respond in 2-3 short sentences by default. Provide longer answers only if explicitly asked."
+            )
+        )
 
     def set_window(self, window):
         self.window = window
@@ -109,19 +118,13 @@ class AtlasBackend:
         return output_path
 
     def _stream_gemini(self, contents):
-        """Streams Gemini responses and enforces the length constraint."""
+        """Streams Gemini responses using persistent memory."""
         full_text = ""
-        system_rule = "\n\n[System: Respond in 2-3 short sentences by default. Provide longer answers only if explicitly asked.]"
-        
-        if isinstance(contents[0], str):
-            contents[0] += system_rule
-
         try:
             self.window.evaluate_js("window.clearResponse()")
-            response = client.models.generate_content_stream(
-                model=MODEL_ID,
-                contents=contents
-            )
+            
+            # Send message to the ongoing chat session instead of isolated generation
+            response = self.chat_session.send_message_stream(contents)
 
             for chunk in response:
                 if chunk.text:
@@ -133,7 +136,6 @@ class AtlasBackend:
             
             if full_text.strip():
                 clean_text = clean_for_speech(full_text)
-                clean_text = clean_text.replace(system_rule.strip(), "")
                 self.speak(clean_text)
 
         except Exception as e:
