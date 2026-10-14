@@ -6,6 +6,8 @@ import webview
 import mss
 import re
 import base64
+import subprocess
+from datetime import datetime
 from PIL import Image
 import speech_recognition as sr
 import win32com.client
@@ -28,15 +30,80 @@ client = genai.Client(api_key=API_KEY)
 speech_queue = queue.Queue()
 stop_speaking = threading.Event()
 
+# ==========================================
+# ATLAS TOOL REGISTRY (Phase 1 & 2 Blueprint)
+# ==========================================
+WORKSPACE_DIR = os.path.join(os.getcwd(), "ATLAS_Workspace")
+os.makedirs(WORKSPACE_DIR, exist_ok=True)
+
+def create_note(filename: str, content: str) -> str:
+    """Creates a text or markdown note in the user's workspace.
+    Args:
+        filename: The name of the file (e.g., 'meeting_notes.md', 'todo.txt').
+        content: The text content to save inside the note.
+    """
+    safe_filename = "".join([c for c in filename if c.isalpha() or c.isdigit() or c in " ._-"]).rstrip()
+    filepath = os.path.join(WORKSPACE_DIR, safe_filename)
+    
+    try:
+        with open(filepath, "w", encoding="utf-8") as f:
+            f.write(content)
+        return f"SUCCESS: Note saved at {filepath}"
+    except Exception as e:
+        return f"FAILED: Could not save note. Error: {str(e)}"
+
+def read_document(filename: str) -> str:
+    """Reads the content of an existing document in the user's workspace.
+    Args:
+        filename: The exact name of the file to read.
+    """
+    filepath = os.path.join(WORKSPACE_DIR, filename)
+    if not os.path.exists(filepath):
+        return "FAILED: File does not exist in the workspace."
+    
+    try:
+        with open(filepath, "r", encoding="utf-8") as f:
+            return f.read()
+    except Exception as e:
+        return f"FAILED: Could not read file. Error: {str(e)}"
+
+def open_application(app_name: str) -> str:
+    """Opens an allowed system application.
+    Args:
+        app_name: The name of the app to open (e.g., 'notepad', 'calculator', 'browser').
+    """
+    app_name = app_name.lower()
+    # Level 1 Guardrail: App Allowlist
+    allowed_apps = {
+        "notepad": "notepad.exe",
+        "calculator": "calc.exe",
+        "browser": "start msedge"
+    }
+    
+    if app_name not in allowed_apps:
+        return f"FAILED: '{app_name}' is not in the approved application allowlist."
+        
+    try:
+        subprocess.Popen(allowed_apps[app_name], shell=True)
+        return f"SUCCESS: Launched {app_name}."
+    except Exception as e:
+        return f"FAILED: Could not launch app. Error: {str(e)}"
+
+def get_current_time() -> str:
+    """Gets the current local system time, day, and date."""
+    return datetime.now().strftime("%A, %B %d, %Y - %I:%M %p")
+
+# List of tools to pass to Gemini
+ATLAS_TOOLS = [create_note, read_document, open_application, get_current_time]
+
+
 def clean_for_speech(text):
-    """Removes Markdown symbols so the voice engine reads naturally."""
     text = re.sub(r'```.*?```', '', text, flags=re.DOTALL) 
     text = re.sub(r'[*_#`]', '', text) 
     text = re.sub(r'\[(.*?)\]\(.*?\)', r'\1', text) 
     return text.strip()
 
 def tts_worker():
-    """Background worker using native Windows SAPI5 with bilingual voice switching."""
     pythoncom.CoInitialize()
     speaker = win32com.client.Dispatch("SAPI.SpVoice")
     speaker.Rate = 0 
@@ -105,11 +172,16 @@ class AtlasBackend:
         self._initialize_chat()
 
     def _initialize_chat(self):
-        """Creates or resets the Gemini chat session."""
+        """Creates the chat session equipped with the Tool Registry."""
         self.chat_session = client.chats.create(
             model=MODEL_ID,
             config=types.GenerateContentConfig(
-                system_instruction="Respond in 2-3 short sentences by default. Use markdown for lists or code if asked."
+                system_instruction="""You are ATLAS, a personal AI desktop assistant. 
+                You have access to tools to interact with the user's system. 
+                If the user asks you to perform a task, use the appropriate tool. 
+                Always confirm what action you took in 1-2 concise sentences.""",
+                tools=ATLAS_TOOLS,
+                temperature=0.3 # Lower temperature for more reliable function calling
             )
         )
 
@@ -117,113 +189,62 @@ class AtlasBackend:
         self.window = window
 
     def stop_audio(self):
-        """Safely stops TTS and clears the queue."""
         stop_speaking.set()
         with speech_queue.mutex:
             speech_queue.queue.clear()
         speech_queue.put("__STOP__")
 
     def speak(self, text):
-        """Pushes text to the TTS worker queue."""
         speech_queue.put(text)
 
-    
     def toggle_pin(self, pinned):
         import ctypes
         from ctypes import wintypes
-    
         user32 = ctypes.WinDLL("user32", use_last_error=True)
-    
-        user32.SetWindowPos.argtypes = [
-            wintypes.HWND,
-            wintypes.HWND,
-            ctypes.c_int,
-            ctypes.c_int,
-            ctypes.c_int,
-            ctypes.c_int,
-            wintypes.UINT
-        ]
+        user32.SetWindowPos.argtypes = [wintypes.HWND, wintypes.HWND, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int, wintypes.UINT]
         user32.SetWindowPos.restype = wintypes.BOOL
-    
-        user32.GetWindowLongW.argtypes = [
-            wintypes.HWND,
-            ctypes.c_int
-        ]
+        user32.GetWindowLongW.argtypes = [wintypes.HWND, ctypes.c_int]
         user32.GetWindowLongW.restype = ctypes.c_long
-    
-        # Find the ATLAS native window handle.
+        
         hwnd = None
-    
         try:
             native = self.window.native if self.window else None
             handle = getattr(native, "Handle", None)
-    
-            if handle:
-                hwnd = wintypes.HWND(int(handle))
+            if handle: hwnd = wintypes.HWND(int(handle))
         except Exception:
             pass
-    
-        # Fallback: find the window by its title.
+            
         if not hwnd:
-            user32.FindWindowW.argtypes = [
-                wintypes.LPCWSTR,
-                wintypes.LPCWSTR
-            ]
+            user32.FindWindowW.argtypes = [wintypes.LPCWSTR, wintypes.LPCWSTR]
             user32.FindWindowW.restype = wintypes.HWND
-    
-            hwnd = user32.FindWindowW(
-                None,
-                "ATLAS AI Assistant"
-            )
-    
-        if not hwnd:
-            return False
-    
+            hwnd = user32.FindWindowW(None, "ATLAS AI Assistant")
+            
+        if not hwnd: return False
+        
         HWND_TOPMOST = wintypes.HWND(-1)
         HWND_NOTOPMOST = wintypes.HWND(-2)
-    
         SWP_NOMOVE = 0x0002
         SWP_NOSIZE = 0x0001
         SWP_NOACTIVATE = 0x0010
-    
         GWL_EXSTYLE = -20
         WS_EX_TOPMOST = 0x00000008
-    
-        # Apply the requested always-on-top state.
+        
         ctypes.set_last_error(0)
-    
-        success = user32.SetWindowPos(
-            hwnd,
-            HWND_TOPMOST if pinned else HWND_NOTOPMOST,
-            0, 0, 0, 0,
-            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE
-        )
-    
-        if not success:
-            return False
-    
-        # Verify the actual Windows window state.
-        style = user32.GetWindowLongW(
-            hwnd,
-            GWL_EXSTYLE
-        )
-    
+        success = user32.SetWindowPos(hwnd, HWND_TOPMOST if pinned else HWND_NOTOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE)
+        if not success: return False
+        
+        style = user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
         actual_state = bool(style & WS_EX_TOPMOST)
-    
         self.is_pinned = actual_state
-    
         return actual_state == bool(pinned)
 
-
     def clear_chat(self):
-        """Wipes the internal session memory."""
         self._initialize_chat()
 
     def capture_screen(self, output_path="current_screen.png"):
-        """Captures screen. Hides ATLAS UI temporarily to prevent self-capture."""
         if self.window:
             self.window.hide()
-            time.sleep(0.15)  # Give Windows Desktop Manager time to redraw background
+            time.sleep(0.15) 
             
         with mss.MSS() as sct:
             sct.shot(mon=1, output=output_path)
@@ -235,31 +256,28 @@ class AtlasBackend:
         img.thumbnail((1280, 1280))
         img.save(output_path)
         
-        # Send thumbnail preview to UI
         with open(output_path, "rb") as image_file:
             encoded_string = base64.b64encode(image_file.read()).decode('utf-8')
             self.window.evaluate_js(f"window.showImagePreview('data:image/png;base64,{encoded_string}')")
             
         return output_path
 
-    def _stream_gemini(self, contents):
-        """Streams Gemini responses using persistent memory and chat bubbles."""
-        full_text = ""
+    def _execute_gemini(self, contents):
+        """Standard execution. Function calls resolve automatically via the SDK."""
         try:
             self.window.evaluate_js("window.createNewAssistantBubble()")
-            response = self.chat_session.send_message_stream(contents)
-
-            for chunk in response:
-                if chunk.text:
-                    full_text += chunk.text
-                    safe_chunk = chunk.text.replace("\\", "\\\\").replace("'", "\\'").replace("\n", "\\n").replace("`", "\\`")
-                    self.window.evaluate_js(f"window.appendChunk('{safe_chunk}')")
+            
+            # Using send_message instead of stream to safely handle auto-function calling execution
+            response = self.chat_session.send_message(contents)
+            
+            if response.text:
+                safe_text = response.text.replace("\\", "\\\\").replace("'", "\\'").replace("\n", "\\n").replace("`", "\\`")
+                self.window.evaluate_js(f"window.appendChunk('{safe_text}')")
+                
+                clean_text = clean_for_speech(response.text)
+                self.speak(clean_text)
 
             self.window.evaluate_js("window.finalizeResponse()")
-            
-            if full_text.strip():
-                clean_text = clean_for_speech(full_text)
-                self.speak(clean_text)
 
         except Exception as e:
             err_msg = f"Error: {e}"
@@ -271,7 +289,7 @@ class AtlasBackend:
         self.is_processing = True
         try:
             img_path = self.capture_screen()
-            self._stream_gemini([question, Image.open(img_path)])
+            self._execute_gemini([question, Image.open(img_path)])
         finally:
             self.is_processing = False
 
@@ -279,7 +297,7 @@ class AtlasBackend:
         if self.is_processing: return
         self.is_processing = True
         try:
-            self._stream_gemini([question])
+            self._execute_gemini([question])
         finally:
             self.is_processing = False
 
@@ -306,17 +324,15 @@ class AtlasBackend:
             if transcript:
                 safe_tr = transcript.replace("'", "\\'")
                 self.window.evaluate_js(f"window.updateInputBox('{safe_tr}')")
-                
-                # Append user bubble for voice input
                 self.window.evaluate_js(f"window.addUserBubble('🎙️ {safe_tr}')")
                 
                 if "screen" in transcript.lower():
                     self.window.evaluate_js("setStatus('Analyzing screen...', '#06b6d4', true)")
                     img_path = self.capture_screen()
-                    self._stream_gemini([transcript, Image.open(img_path)])
+                    self._execute_gemini([transcript, Image.open(img_path)])
                 else:
                     self.window.evaluate_js("setStatus('Thinking...', '#f59e0b', true)")
-                    self._stream_gemini([transcript])
+                    self._execute_gemini([transcript])
         except sr.UnknownValueError:
             self.window.evaluate_js("setStatus('Could not understand voice.', '#ef4444', false)")
         except Exception as e:
@@ -328,7 +344,6 @@ class AtlasBackend:
 
 
 def wake_word_listener(backend):
-    """Background thread listening for 'Atlas'."""
     r = sr.Recognizer()
     r.pause_threshold = 0.5 
     r.non_speaking_duration = 0.3
@@ -341,21 +356,17 @@ def wake_word_listener(backend):
         while True:
             try:
                 audio = r.listen(source, phrase_time_limit=5)
-                
-                if backend.is_processing:
-                    continue
-
+                if backend.is_processing: continue
                 phrase = r.recognize_google(audio).lower()
 
                 if "atlas" in phrase:
                     backend.stop_audio()
                     time.sleep(0.1) 
                     stop_speaking.clear() 
-                    
                     backend.is_processing = True 
+                    
                     try:
                         command = phrase.replace("atlas", "").strip()
-                        
                         if not command:
                             backend.window.evaluate_js("setStatus('Atlas detected! Listening...', '#ef4444', true)")
                             r.pause_threshold = 0.5 
@@ -372,11 +383,11 @@ def wake_word_listener(backend):
                                 backend.window.evaluate_js(f"window.addUserBubble('🎙️ 🖥️ [Screen]: {safe_cmd}')")
                                 backend.window.evaluate_js("setStatus('Inspecting screen...', '#06b6d4', true)")
                                 img_path = backend.capture_screen()
-                                backend._stream_gemini([command, Image.open(img_path)])
+                                backend._execute_gemini([command, Image.open(img_path)])
                             else:
                                 backend.window.evaluate_js(f"window.addUserBubble('🎙️ {safe_cmd}')")
                                 backend.window.evaluate_js("setStatus('Thinking...', '#f59e0b', true)")
-                                backend._stream_gemini([command])
+                                backend._execute_gemini([command])
                     finally:
                         backend.is_processing = False
                         backend.window.evaluate_js("setStatus('Ready', '#10b981', false)")
@@ -386,7 +397,6 @@ def wake_word_listener(backend):
 
 if __name__ == '__main__':
     backend = AtlasBackend()
-    
     window = webview.create_window(
         'ATLAS AI Assistant',
         'ui/index.html',
@@ -396,7 +406,5 @@ if __name__ == '__main__':
         resizable=True
     )
     backend.set_window(window)
-
     threading.Thread(target=wake_word_listener, args=(backend,), daemon=True).start()
-
     webview.start()
