@@ -1,15 +1,16 @@
-# ATLAS - Advanced AI Screen Assistant
+# ATLAS Operator: Vision & Desktop AI Assistant
 
-ATLAS is a lightweight, multimodal desktop AI assistant built with Python and PyWebView. Powered by Google's Gemini API, it can see your screen, hold contextual conversations, listen to your voice, and respond using highly realistic neural text-to-speech.
+ATLAS is a fast, modular, and autonomous personal AI desktop operator powered by **Gemini 3.1 Flash-Lite**. Built on a native 60 FPS CustomTkinter UI, ATLAS features a zero-latency Instant Reflex Router, a custom Relative-Peak Voice Activity Detector (VAD), and a Vision-Action screen agent that can autonomously locate and interact with any UI element on your monitor.
 
-## ✨ Features
+## ✨ Key Features
 
-- **👀 Real-Time Screen Analysis:** Captures and analyzes your primary monitor to answer questions about what you are currently looking at.
-- **🧠 Contextual Memory:** Utilizes Gemini Chat Sessions to remember ongoing conversation context.
-- **🎙️ Neural Voice Engine:** Generates hyper-realistic, professional audio responses using Microsoft Edge-TTS.
-- **⚡ Wake-Word Detection:** Runs a background listener—simply say **"Atlas"** to wake the assistant hands-free.
-- **🖥️ Modern Desktop UI:** Features a sleek, dark-mode glassmorphism interface rendered natively via PyWebView.
-- **🗣️ Instant Interruption:** Automatically cuts off ongoing audio playback if interrupted with a new voice command.
+* **Autonomous Vision-Action Agent:** Takes a screenshot, visually locates any button, input box, or chat using normalized coordinates, draws a targeting reticle, and interacts via mouse and keyboard automatically.
+* **Instant Local Reflex Router:** Everyday commands (time checks, system health, local app launching) execute in under `0.05s` with zero API latency.
+* **Universal App Launcher:** Dynamically scans Windows `Get-StartApps` (including Microsoft Store/UWP apps like WhatsApp), Start Menu `.lnk` shortcuts, and Registry paths to launch *any* installed application.
+* **Smart WhatsApp Integration:** Features a dedicated visual agent that brings WhatsApp to the foreground, locates the search bar, selects contacts, and sends messages safely using thread-safe native Windows clipboard injection.
+* **Zero-Hang Speech Engine:** Uses a custom relative-peak VAD over raw 16kHz PCM audio frames. Automatically stops recording `0.85s-1.0s` after you finish speaking—even in noisy rooms with fan hum.
+* **Resilient Model Failover:** Features a 16-model deep redundancy chain. If a Gemini endpoint experiences high traffic (e.g., `503 UNAVAILABLE`), ATLAS instantly fails over to the next available model.
+* **60 FPS Cyber-HUD UI:** Native Python UI featuring an animated orbital AI core reactor, a physics-interpolated mirrored audio spectrum analyzer, procedural anti-aliased vector icons, and smooth slide-in memory/task drawers.
 
 ## 📋 Prerequisites
 
@@ -19,7 +20,14 @@ ATLAS is a lightweight, multimodal desktop AI assistant built with Python and Py
 
 ## 🚀 Installation & Setup
 
-1. **Clone the repository:**
-   ```bash
-   git clone <your-repository-url>
-   cd ATLAS
+Follow these steps to get ATLAS running on your Windows machine:
+
+1. `git clone https://github.com/Vishal-akodiya/ATLAS.git`  
+   `cd ATLAS`
+2. `python -m venv venv`
+3. `venv\Scripts\activate.bat`
+4. `pip install -r requirements.txt`
+5. Create a file named `.env` in the folder and add:
+   ```env
+   GEMINI_API_KEY=your_gemini_api_key_here
+   GEMINI_MODEL=gemini-3.1-flash-lite

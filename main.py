@@ -3,6 +3,7 @@ import time
 import threading
 from datetime import datetime
 import speech_recognition as sr
+import serial  # Added for Arduino communication
 
 from memory.config_manager import ConfigManager
 from memory.memory_manager import MemoryManager
@@ -40,6 +41,17 @@ class AtlasOperator:
         self.confirm = ConfirmationGate()
         self.undo = UndoManager()
 
+        # ==========================================
+        # ARDUINO HARDWARE INITIALIZATION
+        # ==========================================
+        self.arduino = None
+        try:
+            # Connect to Arduino on COM6 at 9600 baud
+            self.arduino = serial.Serial('COM6', 9600, timeout=1)
+            print("Successfully connected to Arduino on COM6.")
+        except Exception as e:
+            print(f"Arduino not detected on COM6: {e}. ATLAS will run without hardware alarms.")
+
         self.desktop_actions = DesktopActions(
             self.config,
             self.memory,
@@ -52,7 +64,6 @@ class AtlasOperator:
             on_preview_Callback=lambda path: self.ui.show_screen_preview(path) if self.ui else None,
             on_action_status=lambda msg: self.ui.set_action_banner(msg) if self.ui else None,
         )
-        # Bind ScreenProcessor to DesktopActions for visual WhatsApp execution
         self.desktop_actions.bind_screen_processor(self.screen_processor)
 
         self.file_actions = FileController(self.memory, self.confirm, self.undo)
@@ -98,14 +109,23 @@ class AtlasOperator:
         )
 
     # ==========================================
+    # HARDWARE TRIGGERS
+    # ==========================================
+    def trigger_hardware_alarm(self):
+        """Sends the 'A' byte to the Arduino to play the buzzer sequence."""
+        if self.arduino and self.arduino.is_open:
+            try:
+                self.arduino.write(b'A')
+            except Exception as e:
+                print(f"Failed to trigger Arduino: {e}")
+
+    # ==========================================
     # INSTANT LOCAL REFLEX ROUTER (< 0.05s)
     # ==========================================
     def _try_instant_reflex(self, prompt: str) -> str | None:
         clean = prompt.strip()
         low = clean.lower()
 
-        # WhatsApp Visual Flow Reflex:
-        # e.g., "send a whatsapp message to Rahul saying I am on my way"
         wa_match = re.search(
             r"(?:send\s+(?:a\s+)?(?:whatsapp\s+)?(?:message\s+)?to|whatsapp)\s+([a-zA-Z0-9_ \-]+?)\s+(?:saying|that|message|:)\s+(.+)$",
             clean,
@@ -117,7 +137,6 @@ class AtlasOperator:
             res = self.screen_processor.visual_send_whatsapp(contact, msg_body)
             return f"**{res}**"
 
-        # Direct Open App Reflex
         if " and " not in low:
             open_match = re.match(r"^(?:please\s+)?(?:open|launch|start)\s+([a-zA-Z0-9_ \-\.]+)$", clean, flags=re.IGNORECASE)
             if open_match:
@@ -126,23 +145,18 @@ class AtlasOperator:
                     res = self.desktop_actions.open_app(app_target)
                     return f"**{res}**"
 
-        # Time Reflex
         if low in ("what time is it", "what time is it?", "current time", "tell me the time", "what is the time"):
             return f"It is currently **{self.get_current_time()}**."
 
-        # System Status Reflex
         if low in ("check my cpu, ram, and disk space status.", "system status", "check system status", "system health"):
             return self.sys_actions.check_system_status()
 
-        # Installed Apps Reflex
         if low in ("list the applications installed on my computer.", "list installed apps", "show installed apps"):
             return self.desktop_actions.list_installed_apps()
 
-        # Tasks Reflex
         if low in ("list tasks", "show my tasks", "what are my tasks", "show reminders"):
             return self.reminder_actions.list_tasks()
 
-        # Undo Reflex
         if low in ("undo", "undo last action", "undo that"):
             return f"↩️ **{self.undo.undo_last()}**"
 
@@ -304,7 +318,6 @@ class AtlasOperator:
         self.wake_listener.is_busy = True
         self.desktop_actions.clear_emergency_stop()
         try:
-            # 1. Instant Reflex Router Check
             if not with_screen:
                 instant_reply = self._try_instant_reflex(prompt)
                 if instant_reply:
@@ -312,7 +325,6 @@ class AtlasOperator:
                     self.tts.speak(instant_reply)
                     return
 
-            # 2. Vision and Tool Execution
             img_path = None
             if with_screen:
                 self.ui.set_status("Capturing Screen...", "#06b6d4", True)
@@ -329,6 +341,9 @@ class AtlasOperator:
             self.wake_listener.is_busy = False
             self.ui.set_status("Ready", "#10b981", False)
 
+    # ==========================================
+    # BACKGROUND PROACTIVE LOOP (Handles Triggers)
+    # ==========================================
     def _proactive_loop(self):
         while True:
             time.sleep(12)
@@ -336,6 +351,10 @@ class AtlasOperator:
             for ui_msg, tts_msg in alerts:
                 self.ui.add_assistant_bubble(ui_msg)
                 self.tts.speak(tts_msg)
+                
+                # If the alert is an actual reminder due (not just an upcoming nudge)
+                if "Reminder Due" in ui_msg:
+                    self.trigger_hardware_alarm()
 
     def run(self):
         self.ui.render_tasks(self.memory.get_active_tasks())
@@ -343,7 +362,6 @@ class AtlasOperator:
         self.wake_listener.start()
         threading.Thread(target=self._proactive_loop, daemon=True).start()
         self.ui.mainloop()
-
 
 if __name__ == "__main__":
     app = AtlasOperator()

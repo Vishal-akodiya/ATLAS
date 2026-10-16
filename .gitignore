@@ -12,6 +12,7 @@ build/
 develop-eggs/
 dist/
 downloads/
+ATLAS_Workspace/
 eggs/
 .eggs/
 lib/
