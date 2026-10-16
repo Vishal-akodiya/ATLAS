@@ -1,19 +1,11 @@
-# --- Screen Capture & Processing ---
-mss
-pillow
-
-# --- Web UI Framework ---
-pywebview
-
-# --- AI Models ---
-google-genai
-
-# --- Speech Recognition (Microphone) ---
-SpeechRecognition
-pyaudio
-
-# --- Text-to-Speech (Audio Output) ---
-pywin32
-
-# --- Security & Environment ---
-python-dotenv
+customtkinter>=5.2.2
+google-genai>=1.0.0
+python-dotenv>=1.0.1
+SpeechRecognition>=3.10.4
+PyAudio>=0.2.14
+pywin32>=306
+mss>=9.0.1
+Pillow>=10.4.0
+psutil>=6.0.0
+pyautogui>=0.9.54
+pyperclip>=1.9.0
