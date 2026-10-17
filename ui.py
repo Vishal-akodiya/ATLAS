@@ -1,156 +1,281 @@
+import os
 import re
+import sys
 import math
 from datetime import datetime
-import tkinter as tk
-import customtkinter as ctk
-from PIL import Image, ImageDraw
 from typing import Callable, List, Dict, Any
 
-ctk.set_appearance_mode("Dark")
+from PySide6 import QtCore, QtWidgets, QtGui
+from core.solar_hud import AtomicSolarHUD
+from core.spectrum_hud import AudioSpectrumHUD
 
 
-class IconFactory:
-    """Generates crisp 4x-supersampled anti-aliased vector icons in memory using Pillow."""
+# =====================================================================
+# TOP CYBERNETIC HEADER BANNER (No "60 FPS" text per Requirement 4)
+# =====================================================================
+class CyberHeaderBanner(QtWidgets.QWidget):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFixedHeight(64)
 
-    @staticmethod
-    def _canvas(size: int = 96):
-        img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
-        return img, ImageDraw.Draw(img), size
+    def paintEvent(self, event):
+        painter = QtGui.QPainter(self)
+        painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing)
 
-    @staticmethod
-    def _to_ctk(img: Image.Image, display_size=(18, 18)) -> ctk.CTkImage:
-        smooth = img.resize((display_size[0] * 2, display_size[1] * 2), Image.LANCZOS)
-        return ctk.CTkImage(light_image=smooth, dark_image=smooth, size=display_size)
+        w, h = self.width(), self.height()
+        cx = w / 2.0
 
-    @classmethod
-    def screen_reticle(cls, color="#ffffff", accent="#a5f3fc", size=(18, 18)) -> ctk.CTkImage:
-        img, d, s = cls._canvas()
-        d.rounded_rectangle((10, 14, s - 10, s - 26), radius=10, outline=color, width=6)
-        d.line((s // 2, s - 26, s // 2, s - 12), fill=color, width=6)
-        d.line((28, s - 12, s - 28, s - 12), fill=color, width=6)
-        cx, cy = s // 2, (s - 12) // 2
-        d.ellipse((cx - 12, cy - 12, cx + 12, cy + 12), outline=accent, width=5)
-        d.ellipse((cx - 3, cy - 3, cx + 3, cy + 3), fill=accent)
-        return cls._to_ctk(img, size)
+        # Background fill
+        painter.fillRect(self.rect(), QtGui.QColor(5, 10, 18))
 
-    @classmethod
-    def send_bolt(cls, color="#ffffff", size=(18, 18)) -> ctk.CTkImage:
-        img, d, s = cls._canvas()
-        pts = [(14, 46), (82, 14), (54, 82), (42, 54)]
-        d.polygon(pts, fill=color)
-        return cls._to_ctk(img, size)
+        # Top cybernetic polygon frame
+        top_poly = QtGui.QPolygonF([
+            QtCore.QPointF(12, 6),
+            QtCore.QPointF(w - 12, 6),
+            QtCore.QPointF(w - 12, 46),
+            QtCore.QPointF(cx + 150, 46),
+            QtCore.QPointF(cx + 120, 60),
+            QtCore.QPointF(cx - 120, 60),
+            QtCore.QPointF(cx - 150, 46),
+            QtCore.QPointF(12, 46),
+        ])
 
-    @classmethod
-    def mic(cls, color="#10b981", size=(18, 18)) -> ctk.CTkImage:
-        img, d, s = cls._canvas()
-        d.rounded_rectangle((34, 12, 62, 54), radius=14, fill=color)
-        d.arc((22, 26, 74, 68), start=0, end=180, fill=color, width=6)
-        d.line((48, 68, 48, 84), fill=color, width=6)
-        d.line((32, 84, 64, 84), fill=color, width=6)
-        return cls._to_ctk(img, size)
+        grad = QtGui.QLinearGradient(0, 0, 0, h)
+        grad.setColorAt(0.0, QtGui.QColor(12, 24, 38, 230))
+        grad.setColorAt(1.0, QtGui.QColor(7, 14, 24, 240))
+        painter.setBrush(QtGui.QBrush(grad))
 
-    @classmethod
-    def stop_square(cls, color="#ef4444", size=(18, 18)) -> ctk.CTkImage:
-        img, d, s = cls._canvas()
-        d.rounded_rectangle((14, 14, s - 14, s - 14), radius=16, outline=color, width=6)
-        d.rounded_rectangle((30, 30, s - 30, s - 30), radius=6, fill=color)
-        return cls._to_ctk(img, size)
+        border_pen = QtGui.QPen(QtGui.QColor(35, 95, 120, 200))
+        border_pen.setWidthF(1.6)
+        painter.setPen(border_pen)
+        painter.drawPolygon(top_poly)
 
-    @classmethod
-    def tasks_board(cls, color="#818cf8", size=(16, 16)) -> ctk.CTkImage:
-        img, d, s = cls._canvas()
-        d.rounded_rectangle((18, 16, s - 18, s - 12), radius=10, outline=color, width=6)
-        d.rounded_rectangle((34, 8, s - 34, 24), radius=6, fill=color)
-        d.line((30, 42, s - 30, 42), fill=color, width=6)
-        d.line((30, 58, s - 30, 58), fill=color, width=6)
-        d.line((30, 74, s - 42, 74), fill=color, width=6)
-        return cls._to_ctk(img, size)
+        # Glowing cyan bottom lip under "ATLAS" center trapezoid
+        glow_pen = QtGui.QPen(QtGui.QColor(0, 235, 255, 90))
+        glow_pen.setWidthF(6.0)
+        glow_pen.setCapStyle(QtCore.Qt.PenCapStyle.RoundCap)
+        painter.setPen(glow_pen)
+        painter.drawLine(QtCore.QPointF(cx - 52, 59), QtCore.QPointF(cx + 52, 59))
 
-    @classmethod
-    def memory_chip(cls, color="#c084fc", size=(16, 16)) -> ctk.CTkImage:
-        img, d, s = cls._canvas()
-        d.rounded_rectangle((24, 24, s - 24, s - 24), radius=10, outline=color, width=6)
-        d.rectangle((38, 38, s - 38, s - 38), fill=color)
-        for pos in (34, 48, 62):
-            d.line((pos, 10, pos, 24), fill=color, width=5)
-            d.line((pos, s - 24, pos, s - 10), fill=color, width=5)
-            d.line((10, pos, 24, pos), fill=color, width=5)
-            d.line((s - 24, pos, s - 10, pos), fill=color, width=5)
-        return cls._to_ctk(img, size)
+        core_pen = QtGui.QPen(QtGui.QColor(120, 250, 255, 255))
+        core_pen.setWidthF(2.2)
+        painter.setPen(core_pen)
+        painter.drawLine(QtCore.QPointF(cx - 52, 59), QtCore.QPointF(cx + 52, 59))
 
-    @classmethod
-    def sun_briefing(cls, color="#f59e0b", size=(16, 16)) -> ctk.CTkImage:
-        img, d, s = cls._canvas()
-        c = s // 2
-        d.ellipse((c - 18, c - 18, c + 18, c + 18), fill=color)
-        for i in range(8):
-            ang = i * (math.pi / 4)
-            x1, y1 = c + math.cos(ang) * 26, c + math.sin(ang) * 26
-            x2, y2 = c + math.cos(ang) * 38, c + math.sin(ang) * 38
-            d.line((x1, y1, x2, y2), fill=color, width=6)
-        return cls._to_ctk(img, size)
+        # Left & Right angled telemetry accents flanking ATLAS
+        accent_pen = QtGui.QPen(QtGui.QColor(0, 205, 225, 150))
+        accent_pen.setWidthF(2.0)
+        painter.setPen(accent_pen)
+        for i in range(3):
+            lx = cx - 225 + i * 11
+            painter.drawLine(QtCore.QPointF(lx, 14), QtCore.QPointF(lx + 10, 34))
+            rx = cx + 225 - i * 11
+            painter.drawLine(QtCore.QPointF(rx, 14), QtCore.QPointF(rx - 10, 34))
 
-    @classmethod
-    def undo_arrow(cls, color="#38bdf8", size=(16, 16)) -> ctk.CTkImage:
-        img, d, s = cls._canvas()
-        d.arc((20, 26, s - 16, s - 18), start=200, end=45, fill=color, width=7)
-        d.polygon([(14, 44), (36, 24), (38, 48)], fill=color)
-        return cls._to_ctk(img, size)
+        # Center "ATLAS" Title
+        atlas_font = QtGui.QFont("Bahnschrift", 26, QtGui.QFont.Weight.Bold)
+        atlas_font.setLetterSpacing(QtGui.QFont.SpacingType.AbsoluteSpacing, 6.0)
+        painter.setFont(atlas_font)
+        painter.setPen(QtGui.QColor(225, 248, 255))
+        painter.drawText(QtCore.QRectF(cx - 140, 6, 280, 48), QtCore.Qt.AlignmentFlag.AlignCenter, "ATLAS")
 
-    @classmethod
-    def bell(cls, color="#fbbf24", size=(16, 16)) -> ctk.CTkImage:
-        img, d, s = cls._canvas()
-        d.chord((22, 16, s - 22, s - 16), start=180, end=0, fill=color)
-        d.rectangle((22, 48, s - 22, 68), fill=color)
-        d.rounded_rectangle((14, 64, s - 14, 74), radius=5, fill=color)
-        d.ellipse((40, 74, 56, 88), fill=color)
-        return cls._to_ctk(img, size)
+        # Left Circular Tech Emblem + "GEMINI 3.1 / FLASH-LITE • FULL SYSTEM OPERATOR"
+        emblem_cx, emblem_cy = 38.0, 26.0
+        painter.setPen(QtGui.QPen(QtGui.QColor(0, 225, 220, 210), 2.2))
+        painter.setBrush(QtCore.Qt.BrushStyle.NoBrush)
+        painter.drawEllipse(QtCore.QPointF(emblem_cx, emblem_cy), 14, 14)
+        painter.setPen(QtGui.QPen(QtGui.QColor(0, 225, 220, 130), 1.4, QtCore.Qt.PenStyle.DotLine))
+        painter.drawEllipse(QtCore.QPointF(emblem_cx, emblem_cy), 9, 9)
+        painter.setBrush(QtGui.QColor(0, 240, 215))
+        painter.setPen(QtCore.Qt.PenStyle.NoPen)
+        painter.drawEllipse(QtCore.QPointF(emblem_cx, emblem_cy), 3.2, 3.2)
 
-    @classmethod
-    def pin(cls, color="#a5b4fc", size=(16, 16)) -> ctk.CTkImage:
-        img, d, s = cls._canvas()
-        d.rounded_rectangle((28, 14, s - 28, 26), radius=6, fill=color)
-        d.polygon([(34, 26), (s - 34, 26), (s - 22, 56), (22, 56)], fill=color)
-        d.line((48, 56, 48, 86), fill=color, width=6)
-        return cls._to_ctk(img, size)
+        gem_font = QtGui.QFont("Bahnschrift", 13, QtGui.QFont.Weight.Bold)
+        gem_font.setLetterSpacing(QtGui.QFont.SpacingType.AbsoluteSpacing, 1.2)
+        painter.setFont(gem_font)
+        painter.setPen(QtGui.QColor(80, 215, 230))
+        painter.drawText(QtCore.QPointF(62, 23), "GEMINI 3.1")
 
-    @classmethod
-    def clear_spark(cls, color="#f43f5e", size=(16, 16)) -> ctk.CTkImage:
-        img, d, s = cls._canvas()
-        d.rounded_rectangle((24, 26, s - 24, s - 14), radius=8, outline=color, width=6)
-        d.line((16, 24, s - 16, 24), fill=color, width=6)
-        d.line((38, 14, s - 38, 14), fill=color, width=6)
-        d.line((40, 40, 40, s - 26), fill=color, width=5)
-        d.line((56, 40, 56, s - 26), fill=color, width=5)
-        return cls._to_ctk(img, size)
+        sub_font = QtGui.QFont("Bahnschrift", 8, QtGui.QFont.Weight.DemiBold)
+        sub_font.setLetterSpacing(QtGui.QFont.SpacingType.AbsoluteSpacing, 0.8)
+        painter.setFont(sub_font)
+        painter.setPen(QtGui.QColor(150, 185, 200))
+        painter.drawText(QtCore.QPointF(62, 37), "FLASH-LITE • FULL SYSTEM OPERATOR")
+
+        painter.end()
 
 
-class AtlasUI(ctk.CTk):
-    BG_DEEP = "#080a0f"
-    BG_MAIN = "#0d1017"
-    SURFACE = "#131722"
-    CARD_BG = "#181d2a"
-    CARD_ELEVATED = "#1f2536"
-    BORDER_SUBTLE = "#262d42"
-    BORDER_GLOW = "#4f587a"
+# =====================================================================
+# TOP-RIGHT GLOWING MATRIX BUTTON (Requirement 1)
+# =====================================================================
+class GlowGridButton(QtWidgets.QPushButton):
+    """Square cybernetic icon+label button that renders a neon teal glow when selected."""
 
-    ACCENT = "#6366f1"
-    ACCENT_BRIGHT = "#818cf8"
-    ACCENT_HOVER = "#4f46e5"
-    SCREEN_ACCENT = "#06b6d4"
-    SCREEN_HOVER = "#0891b2"
+    def __init__(self, label: str, icon_type: str, checkable: bool = False, parent=None):
+        super().__init__(parent)
+        self.label_text = label
+        self.icon_type = icon_type
+        self.setCheckable(checkable)
+        self.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+        self.setFixedSize(62, 54)
 
-    TEXT_MAIN = "#f3f4f6"
-    TEXT_SECONDARY = "#cbd5e1"
-    TEXT_MUTED = "#94a3b8"
+    def paintEvent(self, event):
+        painter = QtGui.QPainter(self)
+        painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing)
 
-    STATUS_GREEN = "#10b981"
-    STATUS_AMBER = "#f59e0b"
-    STATUS_RED = "#ef4444"
+        selected = self.isChecked() or self.isDown()
+        hovered = self.underMouse()
+        rect = QtCore.QRectF(3, 3, self.width() - 6, self.height() - 6)
 
-    USER_BUBBLE = "#232b42"
-    ASSISTANT_BUBBLE = "#141824"
+        if selected:
+            # Outer & Inner Neon Teal Glow (matches "Tasks" button in image_f9d099.jpg)
+            for expand, alpha in [(2.5, 45), (1.2, 95)]:
+                glow_r = rect.adjusted(-expand, -expand, expand, expand)
+                g_pen = QtGui.QPen(QtGui.QColor(0, 245, 212, alpha))
+                g_pen.setWidthF(2.5)
+                painter.setPen(g_pen)
+                painter.setBrush(QtCore.Qt.BrushStyle.NoBrush)
+                painter.drawRoundedRect(glow_r, 8, 8)
 
+            bg_grad = QtGui.QLinearGradient(rect.topLeft(), rect.bottomLeft())
+            bg_grad.setColorAt(0.0, QtGui.QColor(12, 68, 74, 235))
+            bg_grad.setColorAt(1.0, QtGui.QColor(8, 38, 46, 240))
+            painter.setBrush(QtGui.QBrush(bg_grad))
+            border_pen = QtGui.QPen(QtGui.QColor(60, 255, 225, 255), 1.8)
+            icon_color = QtGui.QColor(160, 255, 240)
+            text_color = QtGui.QColor(220, 255, 250)
+        else:
+            bg_col = QtGui.QColor(16, 26, 38, 230) if hovered else QtGui.QColor(10, 17, 27, 220)
+            painter.setBrush(bg_col)
+            border_pen = QtGui.QPen(QtGui.QColor(45, 95, 115, 190 if hovered else 130), 1.2)
+            icon_color = QtGui.QColor(110, 175, 195) if not hovered else QtGui.QColor(160, 230, 245)
+            text_color = QtGui.QColor(145, 175, 190)
+
+        painter.setPen(border_pen)
+        painter.drawRoundedRect(rect, 7, 7)
+
+        # Draw Crisp Vector Icon
+        cx = self.width() / 2.0
+        cy = 19.0
+        ic_pen = QtGui.QPen(icon_color, 1.6)
+        ic_pen.setCapStyle(QtCore.Qt.PenCapStyle.RoundCap)
+        ic_pen.setJoinStyle(QtCore.Qt.PenJoinStyle.RoundJoin)
+        painter.setPen(ic_pen)
+        painter.setBrush(QtCore.Qt.BrushStyle.NoBrush)
+
+        if self.icon_type == "tasks":
+            painter.drawRoundedRect(QtCore.QRectF(cx - 7, cy - 7, 14, 15), 2, 2)
+            painter.drawLine(QtCore.QPointF(cx - 3, cy - 1), QtCore.QPointF(cx - 1, cy + 2))
+            painter.drawLine(QtCore.QPointF(cx - 1, cy + 2), QtCore.QPointF(cx + 4, cy - 3))
+        elif self.icon_type == "memory":
+            painter.drawRoundedRect(QtCore.QRectF(cx - 6, cy - 7, 12, 14), 2, 2)
+            painter.drawLine(QtCore.QPointF(cx - 3, cy - 2), QtCore.QPointF(cx + 3, cy - 2))
+            painter.drawLine(QtCore.QPointF(cx - 3, cy + 2), QtCore.QPointF(cx + 3, cy + 2))
+        elif self.icon_type == "briefing":
+            painter.drawRoundedRect(QtCore.QRectF(cx - 7, cy - 7, 14, 14), 2, 2)
+            for dy in (-3, 0, 3):
+                painter.drawLine(QtCore.QPointF(cx - 4, cy + dy), QtCore.QPointF(cx + 4, cy + dy))
+        elif self.icon_type == "undo":
+            painter.drawArc(QtCore.QRectF(cx - 6, cy - 5, 12, 11), 30 * 16, 240 * 16)
+            painter.drawLine(QtCore.QPointF(cx - 6, cy - 2), QtCore.QPointF(cx - 2, cy - 6))
+            painter.drawLine(QtCore.QPointF(cx - 6, cy - 2), QtCore.QPointF(cx - 2, cy + 1))
+        elif self.icon_type == "quiet":
+            painter.drawPolygon([
+                QtCore.QPointF(cx - 6, cy - 2),
+                QtCore.QPointF(cx - 2, cy - 2),
+                QtCore.QPointF(cx + 2, cy - 6),
+                QtCore.QPointF(cx + 2, cy + 6),
+                QtCore.QPointF(cx - 2, cy + 2),
+                QtCore.QPointF(cx - 6, cy + 2),
+            ])
+            painter.drawLine(QtCore.QPointF(cx - 6, cy - 6), QtCore.QPointF(cx + 6, cy + 6))
+        elif self.icon_type == "pin":
+            painter.drawRoundedRect(QtCore.QRectF(cx - 5, cy - 6, 10, 7), 1.5, 1.5)
+            painter.drawLine(QtCore.QPointF(cx, cy + 1), QtCore.QPointF(cx, cy + 7))
+        elif self.icon_type == "clear":
+            painter.drawRoundedRect(QtCore.QRectF(cx - 5, cy - 4, 10, 11), 1.5, 1.5)
+            painter.drawLine(QtCore.QPointF(cx - 7, cy - 4), QtCore.QPointF(cx + 7, cy - 4))
+        elif self.icon_type == "mute":
+            painter.drawRoundedRect(QtCore.QRectF(cx - 3, cy - 7, 6, 9), 3, 3)
+            painter.drawArc(QtCore.QRectF(cx - 6, cy - 4, 12, 9), 180 * 16, 180 * 16)
+            painter.drawLine(QtCore.QPointF(cx - 6, cy - 6), QtCore.QPointF(cx + 6, cy + 6))
+
+        # Label text
+        lbl_font = QtGui.QFont("Bahnschrift", 8, QtGui.QFont.Weight.DemiBold)
+        painter.setFont(lbl_font)
+        painter.setPen(text_color)
+        painter.drawText(QtCore.QRectF(0, 31, self.width(), 18), QtCore.Qt.AlignmentFlag.AlignCenter, self.label_text)
+        painter.end()
+
+
+# =====================================================================
+# CLEAN SCREEN PREVIEW WIDGET (No Crosshair per Requirement 2)
+# =====================================================================
+class CleanScreenPreview(QtWidgets.QWidget):
+    """Displays the live screen capture inside corner HUD brackets WITHOUT any center crosshair."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.pixmap: QtGui.QPixmap | None = None
+        self.setMinimumHeight(180)
+
+    def set_image(self, image_path: str):
+        if os.path.exists(image_path):
+            self.pixmap = QtGui.QPixmap(image_path)
+            self.update()
+
+    def paintEvent(self, event):
+        painter = QtGui.QPainter(self)
+        painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing)
+        painter.setRenderHint(QtGui.QPainter.RenderHint.SmoothPixmapTransform)
+
+        w, h = self.width(), self.height()
+        painter.fillRect(self.rect(), QtGui.QColor(6, 13, 22))
+
+        inner = QtCore.QRectF(12, 10, w - 24, h - 20)
+        if self.pixmap and not self.pixmap.isNull():
+            scaled = self.pixmap.scaled(
+                inner.size().toSize(),
+                QtCore.Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+                QtCore.Qt.TransformationMode.SmoothTransformation,
+            )
+            src_rect = QtCore.QRect(0, 0, int(inner.width()), int(inner.height()))
+            painter.drawPixmap(inner.toRect(), scaled, src_rect)
+        else:
+            # Subtle grid background when awaiting first capture
+            grid_pen = QtGui.QPen(QtGui.QColor(18, 48, 68, 95), 1.0)
+            painter.setPen(grid_pen)
+            for gx in range(int(inner.left()), int(inner.right()), 24):
+                painter.drawLine(gx, int(inner.top()), gx, int(inner.bottom()))
+            for gy in range(int(inner.top()), int(inner.bottom()), 24):
+                painter.drawLine(int(inner.left()), gy, int(inner.right()), gy)
+
+            font = QtGui.QFont("Bahnschrift", 10)
+            painter.setFont(font)
+            painter.setPen(QtGui.QColor(70, 165, 190, 190))
+            painter.drawText(inner, QtCore.Qt.AlignmentFlag.AlignCenter, "LIVE SCREEN FEED READY")
+
+        # Corner Cyan L-Brackets only (No center crosshair!)
+        b_pen = QtGui.QPen(QtGui.QColor(0, 215, 245, 220), 2.2)
+        painter.setPen(b_pen)
+        arm = 18.0
+        l, r, t, b = inner.left(), inner.right(), inner.top(), inner.bottom()
+        painter.drawPolyline([QtCore.QPointF(l, t + arm), QtCore.QPointF(l, t), QtCore.QPointF(l + arm, t)])
+        painter.drawPolyline([QtCore.QPointF(r - arm, t), QtCore.QPointF(r, t), QtCore.QPointF(r, t + arm)])
+        painter.drawPolyline([QtCore.QPointF(l, b - arm), QtCore.QPointF(l, b), QtCore.QPointF(l + arm, b)])
+        painter.drawPolyline([QtCore.QPointF(r - arm, b), QtCore.QPointF(r, b), QtCore.QPointF(r, b - arm)])
+
+        painter.end()
+
+
+# =====================================================================
+# MAIN PYSIDE6 ATLAS CYBERNETIC OPERATOR UI
+# =====================================================================
+class _UISignalBridge(QtCore.QObject):
+    call_signal = QtCore.Signal(object)
+
+
+class AtlasUI(QtWidgets.QMainWindow):
     def __deepcopy__(self, memo):
         return self
 
@@ -170,7 +295,15 @@ class AtlasUI(ctk.CTk):
         on_toggle_quiet: Callable[[bool], None],
         on_approval_decision: Callable[[str], None],
     ):
+        self._qt_app = QtWidgets.QApplication.instance()
+        if not self._qt_app:
+            fmt = QtGui.QSurfaceFormat()
+            fmt.setSamples(4)
+            QtGui.QSurfaceFormat.setDefaultFormat(fmt)
+            self._qt_app = QtWidgets.QApplication(sys.argv)
+
         super().__init__()
+
         self.on_ask_text = on_ask_text
         self.on_ask_screen = on_ask_screen
         self.on_manual_voice = on_manual_voice
@@ -185,744 +318,814 @@ class AtlasUI(ctk.CTk):
         self.on_toggle_quiet = on_toggle_quiet
         self.on_approval_decision = on_approval_decision
 
+        self._bridge = _UISignalBridge()
+        self._bridge.call_signal.connect(self._execute_callable)
+
         self.is_pinned = False
         self.is_muted = False
         self.is_quiet = False
-        self.task_panel_visible = False
-        self.memory_panel_visible = False
+        self.active_right_tab = "tasks"
+        self._cached_tasks: List[Dict[str, Any]] = []
+        self._cached_memories: Dict[str, Any] = {}
 
-        self._anim_phase = 0.0
-        self._state_color = self.STATUS_GREEN
-        self._is_active_busy = False
-        self._num_bars = 16
-        self._target_bars = [0.0] * self._num_bars
-        self._current_bars = [0.0] * self._num_bars
-        self._action_banner_text = ""
+        self.setWindowTitle("ATLAS - Personal AI System Operator")
+        self.resize(1380, 820)
+        self.setMinimumSize(1120, 700)
+        self.setStyleSheet("QMainWindow { background-color: #050a12; }")
 
-        self.title("ATLAS AI Operator")
-        self.geometry("720x850")
-        self.minsize(600, 700)
-        self.configure(fg_color=self.BG_MAIN)
+        self._build_ui()
 
-        self._init_icons()
-        self._build_layout()
-        self._start_animation_engine()
+    @QtCore.Slot(object)
+    def _execute_callable(self, fn):
+        try:
+            fn()
+        except Exception as e:
+            print(f"[UI Signal Error]: {e}")
 
-    def _init_icons(self):
-        self.ico_screen = IconFactory.screen_reticle()
-        self.ico_send = IconFactory.send_bolt()
-        self.ico_mic_on = IconFactory.mic("#10b981")
-        self.ico_mic_off = IconFactory.mic("#ef4444")
-        self.ico_stop = IconFactory.stop_square()
-        self.ico_tasks = IconFactory.tasks_board()
-        self.ico_memory = IconFactory.memory_chip()
-        self.ico_sun = IconFactory.sun_briefing()
-        self.ico_undo = IconFactory.undo_arrow()
-        self.ico_bell = IconFactory.bell("#fbbf24")
-        self.ico_bell_off = IconFactory.bell("#94a3b8")
-        self.ico_pin = IconFactory.pin()
-        self.ico_clear = IconFactory.clear_spark()
+    def safe_call(self, func, *args, **kwargs):
+        self._bridge.call_signal.emit(lambda: func(*args, **kwargs))
 
-    def _build_layout(self):
-        self.grid_columnconfigure(0, weight=1)
-        self.grid_rowconfigure(3, weight=1)
+    # Compatibility wrappers for main.py screen capture hide/show
+    def withdraw(self):
+        self.hide()
 
-        # ==========================================
-        # 1. TOP COMMAND HEADER HUD
-        # ==========================================
-        self.header_card = ctk.CTkFrame(
-            self,
-            fg_color=self.SURFACE,
-            corner_radius=16,
-            border_width=1,
-            border_color=self.BORDER_SUBTLE,
+    def deiconify(self):
+        self.show()
+
+    def mainloop(self):
+        self.show()
+        self._qt_app.exec()
+
+    # =================================================================
+    # BUILD EXACT PROPORTIONAL HUD LAYOUT (Matching image_f9d099.jpg)
+    # =================================================================
+    def _build_ui(self):
+        central = QtWidgets.QWidget(self)
+        self.setCentralWidget(central)
+
+        root_vbox = QtWidgets.QVBoxLayout(central)
+        root_vbox.setContentsMargins(10, 4, 10, 10)
+        root_vbox.setSpacing(8)
+
+        # 1. TOP CYBERNETIC BANNER
+        self.header_banner = CyberHeaderBanner(self)
+        root_vbox.addWidget(self.header_banner)
+
+        # 2. APPROVAL BANNER (Hidden until Level 2/3 action requests confirmation)
+        self.approval_bar = QtWidgets.QFrame()
+        self.approval_bar.setStyleSheet(
+            "QFrame { background-color: #1f1424; border: 1.5px solid #f59e0b; border-radius: 8px; }"
         )
-        self.header_card.grid(row=0, column=0, sticky="ew", padx=18, pady=(14, 6))
-        self.header_card.grid_columnconfigure(1, weight=1)
+        app_layout = QtWidgets.QHBoxLayout(self.approval_bar)
+        app_layout.setContentsMargins(12, 8, 12, 8)
+        self.approval_lbl = QtWidgets.QLabel("")
+        self.approval_lbl.setStyleSheet("color: #f3f4f6; font-family: 'Segoe UI'; font-size: 12px; border: none;")
+        self.approval_lbl.setWordWrap(True)
+        app_layout.addWidget(self.approval_lbl, 1)
 
-        brand_frame = ctk.CTkFrame(self.header_card, fg_color="transparent")
-        brand_frame.grid(row=0, column=0, padx=(12, 8), pady=8, sticky="w")
+        for label, code, col in [
+            ("Approve Once", "approve_once", "#10b981"),
+            ("Deny", "deny", "#f59e0b"),
+            ("Cancel Task", "cancel_task", "#ef4444"),
+        ]:
+            b = QtWidgets.QPushButton(label)
+            b.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+            b.setStyleSheet(
+                f"QPushButton {{ background-color: {col}; color: #040810; font-weight: bold; "
+                f"padding: 6px 12px; border-radius: 5px; border: none; }}"
+            )
+            b.clicked.connect(lambda _=False, c=code: self._resolve_approval(c))
+            app_layout.addWidget(b)
+        self.approval_bar.hide()
+        root_vbox.addWidget(self.approval_bar)
 
-        self.orb_canvas = tk.Canvas(brand_frame, width=42, height=42, bg=self.SURFACE, highlightthickness=0)
-        self.orb_canvas.pack(side="left", padx=(0, 10))
+        # 3. THREE-COLUMN MAIN BODY (Proportions: Left 27%, Center 46%, Right 27%)
+        body_hbox = QtWidgets.QHBoxLayout()
+        body_hbox.setSpacing(12)
+        root_vbox.addLayout(body_hbox, 1)
 
-        title_stack = ctk.CTkFrame(brand_frame, fg_color="transparent")
-        title_stack.pack(side="left")
-        ctk.CTkLabel(
-            title_stack,
-            text="A T L A S",
-            font=ctk.CTkFont(family="Segoe UI", size=17, weight="bold"),
-            text_color=self.ACCENT_BRIGHT,
-        ).pack(anchor="w")
-        ctk.CTkLabel(
-            title_stack,
-            text="GEMINI 3.1 FLASH-LITE  •  FULL SYSTEM OPERATOR",
-            font=ctk.CTkFont(family="Segoe UI", size=9, weight="bold"),
-            text_color=self.TEXT_MUTED,
-        ).pack(anchor="w")
+        # -------------------------------------------------------------
+        # LEFT COLUMN: AtomicSolarHUD (AI Voice) + Clean Screen Preview
+        # -------------------------------------------------------------
+        left_col = QtWidgets.QVBoxLayout()
+        left_col.setSpacing(8)
+        body_hbox.addLayout(left_col, 27)
 
-        # Center Mirrored Waveform Pill
-        self.status_badge = ctk.CTkFrame(
-            self.header_card,
-            fg_color=self.BG_DEEP,
-            corner_radius=999,
-            border_width=1,
-            border_color=self.BORDER_SUBTLE,
+        self.solar_hud = AtomicSolarHUD(self)
+        left_col.addWidget(self.solar_hud, 58)
+
+        sp_title = QtWidgets.QLabel("SCREEN PREVIEW")
+        sp_title.setStyleSheet(
+            "color: #6fb8c4; font-family: 'Bahnschrift'; font-size: 13px; font-weight: 600; letter-spacing: 1px;"
         )
-        self.status_badge.grid(row=0, column=1, padx=6, pady=8, sticky="w")
+        left_col.addWidget(sp_title)
 
-        self.vis_canvas = tk.Canvas(self.status_badge, width=84, height=22, bg=self.BG_DEEP, highlightthickness=0)
-        self.vis_canvas.pack(side="left", padx=(12, 6), pady=4)
-        self.vis_bars = [
-            self.vis_canvas.create_rectangle(2 + i * 5, 9, 5 + i * 5, 13, fill=self.STATUS_GREEN, outline="")
-            for i in range(self._num_bars)
-        ]
-
-        self.status_label = ctk.CTkLabel(
-            self.status_badge,
-            text="Ready",
-            font=ctk.CTkFont(size=12, weight="bold"),
-            text_color=self.STATUS_GREEN,
+        self.screen_card = QtWidgets.QFrame()
+        self.screen_card.setStyleSheet(
+            "QFrame#ScreenCard { background-color: #08111d; border: 1.5px solid #1b4558; border-radius: 6px; }"
         )
-        self.status_label.pack(side="left", padx=(2, 14), pady=3)
+        self.screen_card.setObjectName("ScreenCard")
+        sc_vbox = QtWidgets.QVBoxLayout(self.screen_card)
+        sc_vbox.setContentsMargins(2, 2, 2, 2)
+        sc_vbox.setSpacing(0)
 
-        # Right Vector Icon Toolbar
-        ctrl = ctk.CTkFrame(self.header_card, fg_color="transparent")
-        ctrl.grid(row=0, column=2, padx=(4, 12), pady=8, sticky="e")
+        sc_hdr = QtWidgets.QFrame()
+        sc_hdr.setFixedHeight(28)
+        sc_hdr.setStyleSheet("background-color: #0d1b2a; border-bottom: 1px solid #1b4558;")
+        sc_hdr_l = QtWidgets.QHBoxLayout(sc_hdr)
+        sc_hdr_l.setContentsMargins(10, 0, 10, 0)
+        self.preview_title_lbl = QtWidgets.QLabel("Vision Target Locked")
+        self.preview_title_lbl.setStyleSheet("color: #d8f3f8; font-family: 'Segoe UI'; font-size: 12px; font-weight: 600; border: none;")
+        sc_hdr_l.addWidget(self.preview_title_lbl)
+        sc_hdr_l.addStretch()
+        win_ctrls = QtWidgets.QLabel("—   ✕")
+        win_ctrls.setStyleSheet("color: #6b96a8; font-size: 11px; border: none;")
+        sc_hdr_l.addWidget(win_ctrls)
+        sc_vbox.addWidget(sc_hdr)
 
-        btn_cfg = {
-            "height": 32,
-            "corner_radius": 8,
-            "fg_color": self.CARD_BG,
-            "hover_color": "#283048",
-            "border_width": 1,
-            "border_color": self.BORDER_SUBTLE,
-            "font": ctk.CTkFont(size=12, weight="bold"),
-        }
+        self.clean_preview = CleanScreenPreview(self.screen_card)
+        sc_vbox.addWidget(self.clean_preview, 1)
+        left_col.addWidget(self.screen_card, 42)
 
-        self.btn_tasks = ctk.CTkButton(
-            ctrl, text="Tasks", image=self.ico_tasks, compound="left", width=78,
-            command=self.toggle_task_panel, **btn_cfg
+        # -------------------------------------------------------------
+        # CENTER COLUMN: AudioSpectrumHUD (User Voice) + Chat Stream + Input
+        # -------------------------------------------------------------
+        center_col = QtWidgets.QVBoxLayout()
+        center_col.setSpacing(8)
+        body_hbox.addLayout(center_col, 46)
+
+        self.spectrum_hud = AudioSpectrumHUD(self)
+        center_col.addWidget(self.spectrum_hud, 28)
+
+        # Chat Stream Header Row
+        chat_hdr_row = QtWidgets.QHBoxLayout()
+        chat_hdr_row.setContentsMargins(2, 0, 4, 0)
+        chat_title = QtWidgets.QLabel("CHAT STREAM")
+        chat_title.setStyleSheet(
+            "color: #6fb8c4; font-family: 'Bahnschrift'; font-size: 13px; font-weight: 600; letter-spacing: 1px;"
         )
-        self.btn_tasks.pack(side="left", padx=2)
+        chat_hdr_row.addWidget(chat_title)
+        chat_hdr_row.addStretch()
+        chat_min_close = QtWidgets.QLabel("—   ✕")
+        chat_min_close.setStyleSheet("color: #6b96a8; font-size: 12px;")
+        chat_hdr_row.addWidget(chat_min_close)
+        center_col.addLayout(chat_hdr_row)
 
-        self.btn_memory = ctk.CTkButton(
-            ctrl, text="Memory", image=self.ico_memory, compound="left", width=86,
-            command=self.toggle_memory_panel, **btn_cfg
+        # Chat Stream Scroll Area
+        self.chat_frame = QtWidgets.QFrame()
+        self.chat_frame.setObjectName("ChatFrame")
+        self.chat_frame.setStyleSheet(
+            "QFrame#ChatFrame { background-color: #070e18; border: 1.5px solid #193c4e; border-radius: 6px; }"
         )
-        self.btn_memory.pack(side="left", padx=2)
+        cf_vbox = QtWidgets.QVBoxLayout(self.chat_frame)
+        cf_vbox.setContentsMargins(6, 6, 6, 6)
 
-        ctk.CTkButton(ctrl, text="", image=self.ico_sun, width=34, command=self.on_briefing, **btn_cfg).pack(side="left", padx=2)
-        ctk.CTkButton(ctrl, text="", image=self.ico_undo, width=34, command=self.on_undo, **btn_cfg).pack(side="left", padx=2)
-
-        self.btn_quiet = ctk.CTkButton(ctrl, text="", image=self.ico_bell, width=34, command=self.toggle_quiet, **btn_cfg)
-        self.btn_quiet.pack(side="left", padx=2)
-
-        self.btn_mute = ctk.CTkButton(ctrl, text="", image=self.ico_mic_on, width=34, command=self.toggle_mute, **btn_cfg)
-        self.btn_mute.pack(side="left", padx=2)
-
-        self.btn_pin = ctk.CTkButton(ctrl, text="", image=self.ico_pin, width=34, command=self.toggle_pin, **btn_cfg)
-        self.btn_pin.pack(side="left", padx=2)
-
-        ctk.CTkButton(ctrl, text="", image=self.ico_clear, width=34, command=self._handle_clear, **btn_cfg).pack(side="left", padx=2)
-
-        # ==========================================
-        # 2. QUICK-ACTION CHIP BAR
-        # ==========================================
-        self.chip_bar = ctk.CTkFrame(self, fg_color="transparent")
-        self.chip_bar.grid(row=1, column=0, sticky="ew", padx=18, pady=(0, 4))
-
-        chip_style = {
-            "height": 26,
-            "corner_radius": 999,
-            "fg_color": "#151a28",
-            "hover_color": "#232b42",
-            "border_width": 1,
-            "border_color": self.BORDER_SUBTLE,
-            "font": ctk.CTkFont(size=11),
-            "text_color": self.TEXT_SECONDARY,
-        }
-
-        ctk.CTkButton(
-            self.chip_bar, text="🖥️ Inspect Current Screen",
-            command=lambda: self._quick_prompt("Inspect my current screen and tell me what is open.", screen=True),
-            **chip_style
-        ).pack(side="left", padx=(0, 6))
-
-        ctk.CTkButton(
-            self.chip_bar, text="💬 Send WhatsApp Message",
-            command=lambda: self.update_input_box("Send a WhatsApp message to [Contact Name] saying: "),
-            **chip_style
-        ).pack(side="left", padx=6)
-
-        ctk.CTkButton(
-            self.chip_bar, text="🚀 List Installed PC Apps",
-            command=lambda: self._quick_prompt("List the applications installed on my computer.", screen=False),
-            **chip_style
-        ).pack(side="left", padx=6)
-
-        ctk.CTkButton(
-            self.chip_bar, text="🛠️ System Health",
-            command=lambda: self._quick_prompt("Check my CPU, RAM, and disk space status.", screen=False),
-            **chip_style
-        ).pack(side="left", padx=6)
-
-        # ==========================================
-        # 3. APPROVAL BANNER (Levels 2 & 3 Only)
-        # ==========================================
-        self.approval_frame = ctk.CTkFrame(
-            self, fg_color="#231724", corner_radius=12, border_width=1, border_color=self.STATUS_AMBER
+        self.chat_scroll = QtWidgets.QScrollArea()
+        self.chat_scroll.setWidgetResizable(True)
+        self.chat_scroll.setFrameShape(QtWidgets.QFrame.Shape.NoFrame)
+        self.chat_scroll.setStyleSheet(
+            "QScrollArea { background: transparent; border: none; }"
+            "QScrollBar:vertical { background: #070e18; width: 6px; border-radius: 3px; }"
+            "QScrollBar::handle:vertical { background: #1c4b62; border-radius: 3px; }"
         )
-        self.approval_lbl = ctk.CTkLabel(
-            self.approval_frame, text="", font=ctk.CTkFont(size=12),
-            text_color=self.TEXT_MAIN, wraplength=460, justify="left"
+        self.chat_container = QtWidgets.QWidget()
+        self.chat_container.setStyleSheet("background: transparent;")
+        self.chat_vbox = QtWidgets.QVBoxLayout(self.chat_container)
+        self.chat_vbox.setContentsMargins(8, 8, 8, 8)
+        self.chat_vbox.setSpacing(12)
+        self.chat_vbox.addStretch(1)
+        self.chat_scroll.setWidget(self.chat_container)
+        cf_vbox.addWidget(self.chat_scroll)
+        center_col.addWidget(self.chat_frame, 62)
+
+        # Center Input Box ("Say 'Atlas' or type a command...")
+        self.input_wrap = QtWidgets.QFrame()
+        self.input_wrap.setFixedHeight(44)
+        self.input_wrap.setObjectName("InputWrap")
+        self.input_wrap.setStyleSheet(
+            "QFrame#InputWrap { background-color: #091320; border: 1.5px solid #1d495e; border-radius: 7px; }"
         )
-        self.approval_lbl.pack(side="left", padx=14, pady=10, expand=True, fill="x")
+        in_hbox = QtWidgets.QHBoxLayout(self.input_wrap)
+        in_hbox.setContentsMargins(14, 0, 10, 0)
 
-        btn_box = ctk.CTkFrame(self.approval_frame, fg_color="transparent")
-        btn_box.pack(side="right", padx=10, pady=8)
-        ctk.CTkButton(
-            btn_box, text="✓ Approve Once", width=106, height=26, fg_color=self.STATUS_GREEN,
-            command=lambda: self._resolve_approval("approve_once")
-        ).pack(pady=2)
-        ctk.CTkButton(
-            btn_box, text="✕ Deny", width=106, height=26, fg_color=self.STATUS_AMBER,
-            command=lambda: self._resolve_approval("deny")
-        ).pack(pady=2)
-        ctk.CTkButton(
-            btn_box, text="⏹ Cancel Task", width=106, height=26, fg_color=self.STATUS_RED,
-            command=lambda: self._resolve_approval("cancel_task")
-        ).pack(pady=2)
-
-        # ==========================================
-        # 4. CONVERSATION STREAM (Formatted Markdown Cards)
-        # ==========================================
-        self.chat_scroll = ctk.CTkScrollableFrame(
-            self,
-            fg_color=self.CARD_BG,
-            corner_radius=16,
-            border_width=1,
-            border_color=self.BORDER_SUBTLE,
+        self.input_box = QtWidgets.QLineEdit()
+        self.input_box.setPlaceholderText('Say "Atlas" or type a command...')
+        self.input_box.setStyleSheet(
+            "QLineEdit { background: transparent; border: none; color: #e2f1f8; "
+            "font-family: 'Segoe UI'; font-size: 14px; }"
         )
-        self.chat_scroll.grid(row=3, column=0, sticky="nsew", padx=18, pady=6)
-        self.chat_scroll.grid_columnconfigure(0, weight=1)
+        self.input_box.returnPressed.connect(self._handle_send_click)
+        in_hbox.addWidget(self.input_box, 1)
 
+        send_plane_btn = QtWidgets.QPushButton("➤")
+        send_plane_btn.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+        send_plane_btn.setFixedSize(32, 32)
+        send_plane_btn.setStyleSheet(
+            "QPushButton { background: transparent; color: #529bb5; font-size: 17px; border: none; }"
+            "QPushButton:hover { color: #00f0d4; }"
+        )
+        send_plane_btn.clicked.connect(self._handle_send_click)
+        in_hbox.addWidget(send_plane_btn)
+        center_col.addWidget(self.input_wrap)
+
+        # -------------------------------------------------------------
+        # RIGHT COLUMN: Glowing Button Matrix + Active Tasks 2x2 Grid
+        # -------------------------------------------------------------
+        right_col = QtWidgets.QVBoxLayout()
+        right_col.setSpacing(10)
+        body_hbox.addLayout(right_col, 27)
+
+        # Top-Right Button Matrix Frame
+        self.matrix_frame = QtWidgets.QFrame()
+        self.matrix_frame.setObjectName("MatrixFrame")
+        self.matrix_frame.setStyleSheet(
+            "QFrame#MatrixFrame { background-color: #070e18; border: 1.5px solid #1a3c4e; border-radius: 8px; }"
+        )
+        m_grid = QtWidgets.QGridLayout(self.matrix_frame)
+        m_grid.setContentsMargins(8, 8, 8, 8)
+        m_grid.setSpacing(6)
+
+        self.btn_tasks = GlowGridButton("Tasks", "tasks", checkable=True)
+        self.btn_tasks.setChecked(True)
+        self.btn_tasks.clicked.connect(lambda: self._switch_right_tab("tasks"))
+
+        self.btn_memory = GlowGridButton("Memory", "memory", checkable=True)
+        self.btn_memory.clicked.connect(lambda: self._switch_right_tab("memory"))
+
+        self.btn_briefing = GlowGridButton("Briefing", "briefing", checkable=False)
+        self.btn_briefing.clicked.connect(self.on_briefing)
+
+        self.btn_undo = GlowGridButton("Undo", "undo", checkable=False)
+        self.btn_undo.clicked.connect(self.on_undo)
+
+        self.btn_quiet = GlowGridButton("Quiet", "quiet", checkable=True)
+        self.btn_quiet.clicked.connect(self._handle_quiet_toggle)
+
+        m_grid.addWidget(self.btn_tasks, 0, 0)
+        m_grid.addWidget(self.btn_memory, 0, 1)
+        m_grid.addWidget(self.btn_briefing, 0, 2)
+        m_grid.addWidget(self.btn_undo, 0, 3)
+        m_grid.addWidget(self.btn_quiet, 0, 4)
+
+        # Row 2: Mode Selector (< AUTO >) + Pin + Clear + Mute
+        mode_selector = QtWidgets.QFrame()
+        mode_selector.setFixedHeight(54)
+        mode_selector.setStyleSheet(
+            "QFrame { background-color: #0a111b; border: 1.2px solid #264d5e; border-radius: 7px; }"
+        )
+        ms_l = QtWidgets.QHBoxLayout(mode_selector)
+        ms_l.setContentsMargins(8, 4, 8, 4)
+        lbl_l = QtWidgets.QLabel("‹")
+        lbl_l.setStyleSheet("color: #6fb8c4; font-size: 16px; border: none;")
+        lbl_c = QtWidgets.QLabel("AUTO")
+        lbl_c.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+        lbl_c.setStyleSheet("color: #94bac8; font-family: 'Bahnschrift'; font-size: 10px; border: none;")
+        lbl_r = QtWidgets.QLabel("›")
+        lbl_r.setStyleSheet("color: #6fb8c4; font-size: 16px; border: none;")
+        ms_l.addWidget(lbl_l)
+        ms_l.addWidget(lbl_c, 1)
+        ms_l.addWidget(lbl_r)
+        m_grid.addWidget(mode_selector, 1, 0, 1, 2)
+
+        self.btn_pin = GlowGridButton("Pin", "pin", checkable=True)
+        self.btn_pin.clicked.connect(self._handle_pin_toggle)
+
+        self.btn_clear = GlowGridButton("Clear", "clear", checkable=False)
+        self.btn_clear.clicked.connect(self._handle_clear_click)
+
+        self.btn_mute = GlowGridButton("Mute", "mute", checkable=True)
+        self.btn_mute.clicked.connect(self._handle_mute_toggle)
+
+        m_grid.addWidget(self.btn_pin, 1, 2)
+        m_grid.addWidget(self.btn_clear, 1, 3)
+        m_grid.addWidget(self.btn_mute, 1, 4)
+
+        right_col.addWidget(self.matrix_frame)
+
+        # Active Tasks & Reminders / Memory Inspector Frame
+        self.tasks_frame = QtWidgets.QFrame()
+        self.tasks_frame.setObjectName("TasksFrame")
+        self.tasks_frame.setStyleSheet(
+            "QFrame#TasksFrame { background-color: #070e18; border: 1.5px solid #1a3f52; border-radius: 8px; }"
+        )
+        tf_vbox = QtWidgets.QVBoxLayout(self.tasks_frame)
+        tf_vbox.setContentsMargins(12, 10, 12, 10)
+        tf_vbox.setSpacing(8)
+
+        tf_hdr = QtWidgets.QHBoxLayout()
+        self.right_panel_title = QtWidgets.QLabel("Active Tasks & Reminders")
+        self.right_panel_title.setStyleSheet(
+            "color: #dceef5; font-family: 'Segoe UI'; font-size: 14px; font-weight: 600;"
+        )
+        tf_hdr.addWidget(self.right_panel_title)
+        tf_hdr.addStretch()
+        close_lbl = QtWidgets.QLabel("✕")
+        close_lbl.setStyleSheet("color: #79a6b8; font-size: 13px;")
+        tf_hdr.addWidget(close_lbl)
+        tf_vbox.addLayout(tf_hdr)
+
+        # Divider line
+        div = QtWidgets.QFrame()
+        div.setFixedHeight(1)
+        div.setStyleSheet("background-color: #193a4d;")
+        tf_vbox.addWidget(div)
+
+        # Scrollable 2-Column Grid for Task Cards
+        self.cards_scroll = QtWidgets.QScrollArea()
+        self.cards_scroll.setWidgetResizable(True)
+        self.cards_scroll.setFrameShape(QtWidgets.QFrame.Shape.NoFrame)
+        self.cards_scroll.setStyleSheet("background: transparent; border: none;")
+        self.cards_host = QtWidgets.QWidget()
+        self.cards_grid = QtWidgets.QGridLayout(self.cards_host)
+        self.cards_grid.setContentsMargins(2, 4, 2, 4)
+        self.cards_grid.setSpacing(10)
+        self.cards_scroll.setWidget(self.cards_host)
+        tf_vbox.addWidget(self.cards_scroll, 1)
+
+        # Subtle 4-point star emblem at bottom-right matching reference image
+        star_row = QtWidgets.QHBoxLayout()
+        star_row.addStretch()
+        star_lbl = QtWidgets.QLabel("✦")
+        star_lbl.setStyleSheet("color: rgba(130, 175, 195, 90); font-size: 28px;")
+        star_row.addWidget(star_lbl)
+        tf_vbox.addLayout(star_row)
+
+        right_col.addWidget(self.tasks_frame, 1)
+
+        # =============================================================
+        # 4. BOTTOM FULL-WIDTH COMMAND DOCK
+        # =============================================================
+        bottom_hbox = QtWidgets.QHBoxLayout()
+        bottom_hbox.setSpacing(12)
+        root_vbox.addLayout(bottom_hbox)
+
+        # Left/Center "BOTTOM COMMAND" telemetry bar
+        self.bottom_cmd_bar = QtWidgets.QFrame()
+        self.bottom_cmd_bar.setFixedHeight(44)
+        self.bottom_cmd_bar.setObjectName("BottomCmdBar")
+        self.bottom_cmd_bar.setStyleSheet(
+            "QFrame#BottomCmdBar { background-color: #08111c; border: 1.5px solid #1b4357; border-radius: 7px; }"
+        )
+        bc_l = QtWidgets.QHBoxLayout(self.bottom_cmd_bar)
+        bc_l.setContentsMargins(16, 0, 16, 0)
+        self.action_status_lbl = QtWidgets.QLabel("BOTTOM COMMAND")
+        self.action_status_lbl.setStyleSheet(
+            "color: #6cd4dc; font-family: 'Bahnschrift'; font-size: 13px; font-weight: 600; letter-spacing: 0.8px;"
+        )
+        bc_l.addWidget(self.action_status_lbl)
+        bc_l.addStretch()
+        up_chev = QtWidgets.QLabel("⌃")
+        up_chev.setStyleSheet("color: #78a9ba; font-size: 15px; font-weight: bold;")
+        bc_l.addWidget(up_chev)
+        bottom_hbox.addWidget(self.bottom_cmd_bar, 1)
+
+        # Glowing Cyan "Vision + Screen Task" Button
+        self.btn_vision_task = QtWidgets.QPushButton("Vision + Screen Task")
+        self.btn_vision_task.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+        self.btn_vision_task.setFixedSize(195, 44)
+        self.btn_vision_task.setStyleSheet(
+            "QPushButton {"
+            "  background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #00f5d4, stop:1 #00bbdc);"
+            "  color: #031519; font-family: 'Segoe UI'; font-size: 14px; font-weight: bold;"
+            "  border: 2px solid #88fff0; border-radius: 9px;"
+            "}"
+            "QPushButton:hover {"
+            "  background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #38ffe5, stop:1 #1ad1f0);"
+            "}"
+        )
+        self.btn_vision_task.clicked.connect(self._handle_screen_click)
+        bottom_hbox.addWidget(self.btn_vision_task)
+
+        # Glowing Indigo "Execute / Send" Button
+        self.btn_exec_send = QtWidgets.QPushButton("Execute / Send")
+        self.btn_exec_send.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+        self.btn_exec_send.setFixedSize(175, 44)
+        self.btn_exec_send.setStyleSheet(
+            "QPushButton {"
+            "  background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #727cf5, stop:1 #5458e8);"
+            "  color: #080b1a; font-family: 'Segoe UI'; font-size: 14px; font-weight: bold;"
+            "  border: 2px solid #a5b4fc; border-radius: 9px;"
+            "}"
+            "QPushButton:hover {"
+            "  background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #8b94f8, stop:1 #686cf0);"
+            "}"
+        )
+        self.btn_exec_send.clicked.connect(self._handle_send_click)
+        bottom_hbox.addWidget(self.btn_exec_send)
+
+        # Circular Cyan Mic Button
+        self.btn_round_mic = QtWidgets.QPushButton("🎙")
+        self.btn_round_mic.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+        self.btn_round_mic.setFixedSize(44, 44)
+        self.btn_round_mic.setStyleSheet(
+            "QPushButton { background-color: #0a1926; color: #00f0d4; font-size: 18px; "
+            "border: 1.8px solid #00c8b8; border-radius: 22px; }"
+            "QPushButton:hover { background-color: #102e42; border-color: #5effef; }"
+        )
+        self.btn_round_mic.clicked.connect(self.on_manual_voice)
+        bottom_hbox.addWidget(self.btn_round_mic)
+
+        # Circular Red Stop Button
+        self.btn_round_stop = QtWidgets.QPushButton("■")
+        self.btn_round_stop.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+        self.btn_round_stop.setFixedSize(44, 44)
+        self.btn_round_stop.setStyleSheet(
+            "QPushButton { background-color: #211018; color: #ff4d5e; font-size: 16px; "
+            "border: 1.8px solid #ef4444; border-radius: 22px; }"
+            "QPushButton:hover { background-color: #3d1826; border-color: #ff808b; }"
+        )
+        self.btn_round_stop.clicked.connect(self.on_stop_all)
+        bottom_hbox.addWidget(self.btn_round_stop)
+
+        # Initial Welcome Assistant Card matching image_f9d099.jpg
         self.add_assistant_bubble(
             "**ATLAS Operator Online.**\n"
-            "• **Universal App Access:** Ask me to open *any* installed app on your PC (`WhatsApp`, `Spotify`, `VS Code`, `Discord`, etc.).\n"
-            "• **WhatsApp & Vision Agent:** Ask me to look at your screen or send a WhatsApp message to any contact automatically."
+            "Advanced autonomous personal AI desktop assistant.\n"
+            "• **Orbital AI & Voice Engine:** Solar HUD reacts to AI speech; Spectrum HUD tracks your microphone.\n"
+            "• **Vision & App Control:** Locates UI controls visually and opens any installed PC application.\n"
+            "• **Verified Guardrails:** Reversible task execution with instant hardware & desktop alerts."
         )
 
-        # ==========================================
-        # 5. COMMAND INPUT & LIVE TELEMETRY DOCK
-        # ==========================================
-        self.input_card = ctk.CTkFrame(
-            self,
-            fg_color=self.SURFACE,
-            corner_radius=16,
-            border_width=1,
-            border_color=self.BORDER_SUBTLE,
-        )
-        self.input_card.grid(row=4, column=0, sticky="ew", padx=18, pady=(6, 16))
-        self.input_card.grid_columnconfigure((0, 1), weight=1)
-
-        # Live Action Telemetry Bar
-        self.action_hud = ctk.CTkFrame(self.input_card, fg_color=self.BG_DEEP, corner_radius=8, height=28)
-        self.action_dot_canvas = tk.Canvas(self.action_hud, width=22, height=18, bg=self.BG_DEEP, highlightthickness=0)
-        self.action_dot_canvas.pack(side="left", padx=(10, 4), pady=4)
-        self.action_hud_lbl = ctk.CTkLabel(
-            self.action_hud, text="", font=ctk.CTkFont(size=11, weight="bold"), text_color=self.SCREEN_ACCENT
-        )
-        self.action_hud_lbl.pack(side="left", padx=4, pady=4)
-
-        # Screen Capture + Reticle Preview
-        self.preview_frame = ctk.CTkFrame(
-            self.input_card, fg_color=self.BG_DEEP, corner_radius=10, border_width=1, border_color=self.BORDER_SUBTLE
-        )
-        self.preview_img_lbl = ctk.CTkLabel(self.preview_frame, text="")
-        self.preview_img_lbl.pack(side="left", padx=10, pady=6)
-        self.preview_caption = ctk.CTkLabel(
-            self.preview_frame,
-            text="🎯 Vision Target Locked (Cyan reticle shows interaction point)",
-            font=ctk.CTkFont(size=12, weight="bold"),
-            text_color=self.SCREEN_ACCENT,
-        )
-        self.preview_caption.pack(side="left", padx=8)
-
-        self.input_box = ctk.CTkEntry(
-            self.input_card,
-            placeholder_text="Say 'Atlas' or type a command (e.g., 'Open WhatsApp and send Hi to Rahul')...",
-            height=46,
-            corner_radius=12,
-            fg_color=self.BG_DEEP,
-            border_width=1,
-            border_color=self.BORDER_SUBTLE,
-            text_color=self.TEXT_MAIN,
-            font=ctk.CTkFont(size=14),
-        )
-        self.input_box.grid(row=2, column=0, columnspan=4, sticky="ew", padx=12, pady=(12, 10))
-        self.input_box.bind("<Return>", lambda _e: self._handle_chat_click())
-        self.input_box.bind("<FocusIn>", lambda _e: self.input_box.configure(border_color=self.ACCENT))
-        self.input_box.bind("<FocusOut>", lambda _e: self.input_box.configure(border_color=self.BORDER_SUBTLE))
-
-        self.btn_screen = ctk.CTkButton(
-            self.input_card,
-            text="Vision + Screen Task",
-            image=self.ico_screen,
-            compound="left",
-            height=42,
-            corner_radius=10,
-            fg_color=self.SCREEN_ACCENT,
-            hover_color=self.SCREEN_HOVER,
-            font=ctk.CTkFont(size=13, weight="bold"),
-            command=self._handle_screen_click,
-        )
-        self.btn_screen.grid(row=3, column=0, sticky="ew", padx=(12, 5), pady=(0, 12))
-
-        self.btn_chat = ctk.CTkButton(
-            self.input_card,
-            text="Execute / Send",
-            image=self.ico_send,
-            compound="left",
-            height=42,
-            corner_radius=10,
-            fg_color=self.ACCENT,
-            hover_color=self.ACCENT_HOVER,
-            font=ctk.CTkFont(size=13, weight="bold"),
-            command=self._handle_chat_click,
-        )
-        self.btn_chat.grid(row=3, column=1, sticky="ew", padx=5, pady=(0, 12))
-
-        self.btn_mic = ctk.CTkButton(
-            self.input_card,
-            text="",
-            image=self.ico_mic_on,
-            width=48,
-            height=42,
-            corner_radius=10,
-            fg_color=self.CARD_ELEVATED,
-            hover_color="#2e364f",
-            border_width=1,
-            border_color=self.BORDER_SUBTLE,
-            command=self.on_manual_voice,
-        )
-        self.btn_mic.grid(row=3, column=2, padx=5, pady=(0, 12))
-
-        self.btn_stop = ctk.CTkButton(
-            self.input_card,
-            text="",
-            image=self.ico_stop,
-            width=48,
-            height=42,
-            corner_radius=10,
-            fg_color="#2b141d",
-            hover_color="#4c1d2e",
-            border_width=1,
-            border_color=self.STATUS_RED,
-            command=self.on_stop_all,
-        )
-        self.btn_stop.grid(row=3, column=3, padx=(5, 12), pady=(0, 12))
-
-        # ==========================================
-        # 6. SLIDE-IN TASKS & MEMORY DRAWERS
-        # ==========================================
-        self.task_panel = ctk.CTkFrame(
-            self, width=360, height=390, fg_color=self.SURFACE, corner_radius=14,
-            border_width=1, border_color=self.BORDER_GLOW
-        )
-        thdr = ctk.CTkFrame(self.task_panel, fg_color="transparent")
-        thdr.pack(fill="x", padx=14, pady=(12, 4))
-        ctk.CTkLabel(thdr, text="Active Tasks & Reminders", font=ctk.CTkFont(size=13, weight="bold")).pack(side="left")
-        ctk.CTkButton(thdr, text="✕", width=26, height=24, fg_color="transparent", command=self.toggle_task_panel).pack(side="right")
-        self.task_list_scroll = ctk.CTkScrollableFrame(self.task_panel, fg_color="transparent", width=330, height=310)
-        self.task_list_scroll.pack(fill="both", expand=True, padx=8, pady=6)
-
-        self.memory_panel = ctk.CTkFrame(
-            self, width=380, height=400, fg_color=self.SURFACE, corner_radius=14,
-            border_width=1, border_color=self.BORDER_GLOW
-        )
-        mhdr = ctk.CTkFrame(self.memory_panel, fg_color="transparent")
-        mhdr.pack(fill="x", padx=14, pady=(12, 4))
-        ctk.CTkLabel(mhdr, text="Memory Inspector (Profile & Workspace)", font=ctk.CTkFont(size=13, weight="bold")).pack(side="left")
-        ctk.CTkButton(mhdr, text="✕", width=26, height=24, fg_color="transparent", command=self.toggle_memory_panel).pack(side="right")
-        self.memory_list_scroll = ctk.CTkScrollableFrame(self.memory_panel, fg_color="transparent", width=350, height=320)
-        self.memory_list_scroll.pack(fill="both", expand=True, padx=8, pady=6)
-
-    # ==========================================
-    # RICH MARKDOWN CARD FORMATTER (No Raw ** Asterisks)
-    # ==========================================
-    def _insert_formatted_markdown(self, parent_frame: ctk.CTkFrame, raw_text: str, bg_color: str):
-        """Renders **bold**, `inline code`, and VERIFIED badges cleanly without raw markdown symbols."""
-        clean_lines = raw_text.strip().splitlines() or [raw_text]
-        for line in clean_lines:
-            row = ctk.CTkFrame(parent_frame, fg_color="transparent")
-            row.pack(anchor="w", fill="x", pady=1)
-
-            # Split line into tokens of **bold** or `code`
-            tokens = re.split(r"(\*\*.*?\*\*|`.*?`)", line)
-            text_acc = []
-            for tok in tokens:
-                if not tok:
-                    continue
-                if tok.startswith("**") and tok.endswith("**") and len(tok) > 4:
-                    if text_acc:
-                        ctk.CTkLabel(
-                            row, text="".join(text_acc), font=ctk.CTkFont(size=14),
-                            text_color=self.TEXT_SECONDARY, wraplength=460, justify="left"
-                        ).pack(side="left")
-                        text_acc = []
-                    bold_val = tok[2:-2]
-                    color = self.STATUS_GREEN if "VERIFIED" in bold_val else "#ffffff"
-                    ctk.CTkLabel(
-                        row, text=bold_val, font=ctk.CTkFont(size=14, weight="bold"),
-                        text_color=color, wraplength=460, justify="left"
-                    ).pack(side="left", padx=2)
-                elif tok.startswith("`") and tok.endswith("`") and len(tok) > 2:
-                    if text_acc:
-                        ctk.CTkLabel(
-                            row, text="".join(text_acc), font=ctk.CTkFont(size=14),
-                            text_color=self.TEXT_SECONDARY, wraplength=460, justify="left"
-                        ).pack(side="left")
-                        text_acc = []
-                    code_val = tok[1:-1]
-                    pill = ctk.CTkLabel(
-                        row, text=f" {code_val} ", font=ctk.CTkFont(family="Consolas", size=12, weight="bold"),
-                        fg_color=self.BG_DEEP, text_color=self.SCREEN_ACCENT, corner_radius=5
-                    )
-                    pill.pack(side="left", padx=2)
-                else:
-                    text_acc.append(tok)
-
-            if text_acc:
-                joined = "".join(text_acc)
-                ctk.CTkLabel(
-                    row, text=joined, font=ctk.CTkFont(size=14),
-                    text_color=self.TEXT_MAIN, wraplength=460, justify="left"
-                ).pack(side="left")
-
-    # ==========================================
-    # 30 FPS HUD REACTOR & MIRRORED WAVEFORM ENGINE
-    # ==========================================
-    def _start_animation_engine(self):
-        def _tick():
-            self._anim_phase += 0.12
-
-            # 1. Multi-Ring Orbital Reactor
-            self.orb_canvas.delete("all")
-            cx, cy = 21, 21
-            speed = 2.5 if self._is_active_busy else 1.0
-            pulse = math.sin(self._anim_phase * speed)
-
-            r_out = 16 + pulse * 2.0
-            self.orb_canvas.create_oval(cx - r_out, cy - r_out, cx + r_out, cy + r_out, outline="#262f45", width=2)
-
-            ang1 = (self._anim_phase * 48 * speed) % 360
-            self.orb_canvas.create_arc(
-                cx - 14, cy - 14, cx + 14, cy + 14, start=ang1, extent=100,
-                style=tk.ARC, outline=self.ACCENT_BRIGHT, width=2.5
-            )
-            self.orb_canvas.create_arc(
-                cx - 14, cy - 14, cx + 14, cy + 14, start=(ang1 + 180) % 360, extent=100,
-                style=tk.ARC, outline=self.SCREEN_ACCENT, width=2.5
-            )
-
-            ang2 = (-self._anim_phase * 36 * speed) % 360
-            self.orb_canvas.create_arc(
-                cx - 9, cy - 9, cx + 9, cy + 9, start=ang2, extent=140,
-                style=tk.ARC, outline=self._state_color, width=2
-            )
-
-            r_core = 4.2 + pulse * 0.9
-            self.orb_canvas.create_oval(
-                cx - r_core, cy - r_core, cx + r_core, cy + r_core, fill=self._state_color, outline=""
-            )
-
-            # 2. Mirrored Center-Out 16-Bar Audio Waveform
-            mid_y = 11
-            for i in range(self._num_bars):
-                target = self._target_bars[i]
-                if target > self._current_bars[i]:
-                    self._current_bars[i] += (target - self._current_bars[i]) * 0.48
-                else:
-                    self._current_bars[i] = max(0.05, self._current_bars[i] * 0.82)
-
-                val = self._current_bars[i]
-                if self._is_active_busy and val < 0.18:
-                    val = 0.16 + 0.14 * abs(math.sin(self._anim_phase * 2.2 + i * 0.45))
-
-                half_h = max(1.5, val * 9.5)
-                x0 = 3 + i * 5
-                color = (
-                    self.STATUS_RED if val > 0.72
-                    else (self.STATUS_AMBER if val > 0.38 else self._state_color)
-                )
-                self.vis_canvas.coords(self.vis_bars[i], x0, mid_y - half_h, x0 + 3, mid_y + half_h)
-                self.vis_canvas.itemconfig(self.vis_bars[i], fill=color)
-                self._target_bars[i] *= 0.88
-
-            # 3. Live Action HUD Pulse Dot
-            if self._action_banner_text:
-                self.action_dot_canvas.delete("all")
-                dr = 4 + 2 * abs(math.sin(self._anim_phase * 2.5))
-                self.action_dot_canvas.create_oval(11 - dr, 9 - dr, 11 + dr, 9 + dr, fill=self.SCREEN_ACCENT, outline="")
-
-            self.after(33, _tick)
-
-        self.after(33, _tick)
-
-    def _animate_drawer_in(self, panel: ctk.CTkFrame, target_y: int = 72):
-        start_y = 38
-        steps = 8
-
-        def _step(i):
-            progress = 1.0 - pow(1.0 - (i / steps), 3)
-            cur_y = int(start_y + (target_y - start_y) * progress)
-            panel.place(relx=0.97, y=cur_y, anchor="ne")
-            panel.lift()
-            if i < steps:
-                self.after(14, lambda: _step(i + 1))
-
-        _step(1)
-
-    # ==========================================
-    # THREAD-SAFE UI HELPERS
-    # ==========================================
-    def safe_call(self, func, *args, **kwargs):
-        self.after(0, lambda: func(*args, **kwargs))
-
-    def set_status(self, text: str, color: str = "#10b981", disable_buttons: bool = False):
-        def _u():
-            self.status_label.configure(text=text, text_color=color)
-            self._state_color = color
-            self._is_active_busy = disable_buttons
-            self.header_card.configure(border_color=color if disable_buttons else self.BORDER_SUBTLE)
-            state = "disabled" if disable_buttons else "normal"
-            self.btn_screen.configure(state=state)
-            self.btn_chat.configure(state=state)
-            self.btn_mic.configure(state=state)
-            if not disable_buttons:
-                self.set_action_banner("")
-        self.safe_call(_u)
-
-    def set_action_banner(self, text: str):
-        def _b():
-            self._action_banner_text = text
-            if text:
-                self.action_hud_lbl.configure(text=text)
-                self.action_hud.grid(row=0, column=0, columnspan=4, sticky="ew", padx=12, pady=(10, 0))
-            else:
-                self.action_hud.grid_forget()
-        self.safe_call(_b)
-
-    def update_visualizer(self, levels: List[float]):
-        def _d():
-            if not levels:
-                return
-            for i in range(self._num_bars):
-                src_idx = i % len(levels)
-                mirror_weight = 1.0 - abs((i - self._num_bars / 2) / (self._num_bars / 2)) * 0.35
-                self._target_bars[i] = min(1.0, levels[src_idx] * mirror_weight)
-        self.safe_call(_d)
-
+    # =================================================================
+    # CHAT STREAM BUBBLES (Matching Reference Image Styling)
+    # =================================================================
     def add_user_bubble(self, text: str):
         def _add():
-            stamp = datetime.now().strftime("%H:%M")
-            card = ctk.CTkFrame(
-                self.chat_scroll, fg_color=self.USER_BUBBLE, corner_radius=14,
-                border_width=1, border_color="#384566"
+            stamp = datetime.now().strftime("%I:%M %p").lstrip("0")
+            row_w = QtWidgets.QWidget()
+            row_l = QtWidgets.QHBoxLayout(row_w)
+            row_l.setContentsMargins(4, 2, 4, 2)
+            row_l.setSpacing(10)
+
+            avatar = QtWidgets.QLabel("👤")
+            avatar.setFixedSize(34, 34)
+            avatar.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+            avatar.setStyleSheet(
+                "background-color: #23274a; color: #9da8ff; font-size: 16px; "
+                "border: 1px solid #48528a; border-radius: 17px;"
             )
-            card.pack(anchor="e", pady=6, padx=(80, 6))
+            row_l.addWidget(avatar, 0, QtCore.Qt.AlignmentFlag.AlignTop)
 
-            ctk.CTkLabel(
-                card, text=f"YOU  •  {stamp}", font=ctk.CTkFont(size=10, weight="bold"),
-                text_color=self.ACCENT_BRIGHT
-            ).pack(anchor="e", padx=14, pady=(8, 0))
+            bubble = QtWidgets.QFrame()
+            bubble.setStyleSheet(
+                "QFrame { background-color: #161f30; border: 1px solid #2b3b54; border-radius: 10px; }"
+            )
+            b_vbox = QtWidgets.QVBoxLayout(bubble)
+            b_vbox.setContentsMargins(14, 8, 14, 10)
+            b_vbox.setSpacing(4)
 
-            ctk.CTkLabel(
-                card, text=text, font=ctk.CTkFont(size=14),
-                text_color=self.TEXT_MAIN, wraplength=460, justify="left"
-            ).pack(padx=14, pady=(2, 10))
-            self.chat_scroll._parent_canvas.yview_moveto(1.0)
+            hdr = QtWidgets.QHBoxLayout()
+            you_lbl = QtWidgets.QLabel("You")
+            you_lbl.setStyleSheet("color: #70c8d8; font-weight: bold; font-size: 12px; border: none;")
+            time_lbl = QtWidgets.QLabel(stamp)
+            time_lbl.setStyleSheet("color: #6c8294; font-size: 11px; border: none;")
+            hdr.addWidget(you_lbl)
+            hdr.addStretch()
+            hdr.addWidget(time_lbl)
+            b_vbox.addLayout(hdr)
+
+            msg_lbl = QtWidgets.QLabel(text)
+            msg_lbl.setWordWrap(True)
+            msg_lbl.setStyleSheet("color: #e6f1f8; font-family: 'Segoe UI'; font-size: 13px; border: none;")
+            b_vbox.addWidget(msg_lbl)
+
+            row_l.addWidget(bubble, 1)
+            row_l.addStretch()
+
+            self.chat_vbox.insertWidget(self.chat_vbox.count() - 1, row_w)
+            QtCore.QTimer.singleShot(30, self._scroll_chat_bottom)
+
         self.safe_call(_add)
 
     def add_assistant_bubble(self, text: str):
         def _add():
-            stamp = datetime.now().strftime("%H:%M")
-            outer = ctk.CTkFrame(
-                self.chat_scroll, fg_color=self.ASSISTANT_BUBBLE, corner_radius=14,
-                border_width=1, border_color=self.BORDER_SUBTLE
+            row_w = QtWidgets.QWidget()
+            row_l = QtWidgets.QHBoxLayout(row_w)
+            row_l.setContentsMargins(4, 2, 4, 2)
+            row_l.setSpacing(10)
+
+            avatar = QtWidgets.QLabel("⚛")
+            avatar.setFixedSize(34, 34)
+            avatar.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+            avatar.setStyleSheet(
+                "background-color: #0b2530; color: #00f0d4; font-size: 18px; "
+                "border: 1.5px solid #00c8b8; border-radius: 17px;"
             )
-            outer.pack(anchor="w", pady=6, padx=(6, 65), fill="x")
+            row_l.addWidget(avatar, 0, QtCore.Qt.AlignmentFlag.AlignTop)
 
-            stripe_col = self.STATUS_GREEN if "VERIFIED" in text else self.ACCENT
-            stripe = ctk.CTkFrame(outer, width=4, fg_color=stripe_col, corner_radius=4)
-            stripe.pack(side="left", fill="y", padx=(0, 4), pady=8)
+            card = QtWidgets.QFrame()
+            card.setStyleSheet(
+                "QFrame { background-color: #0b1824; border: 1.5px solid #1e5263; border-radius: 10px; }"
+            )
+            c_vbox = QtWidgets.QVBoxLayout(card)
+            c_vbox.setContentsMargins(16, 10, 16, 12)
+            c_vbox.setSpacing(6)
 
-            inner = ctk.CTkFrame(outer, fg_color="transparent")
-            inner.pack(side="left", fill="both", expand=True, padx=10, pady=8)
+            hdr = QtWidgets.QHBoxLayout()
+            asst_lbl = QtWidgets.QLabel("Assistant")
+            asst_lbl.setStyleSheet("color: #9ab8c8; font-size: 12px; font-weight: 600; border: none;")
+            new_lbl = QtWidgets.QLabel("Newest 〰")
+            new_lbl.setStyleSheet("color: #48b8a8; font-size: 11px; border: none;")
+            hdr.addWidget(asst_lbl)
+            hdr.addStretch()
+            hdr.addWidget(new_lbl)
+            c_vbox.addLayout(hdr)
 
-            ctk.CTkLabel(
-                inner, text=f"ATLAS OPERATOR  •  {stamp}",
-                font=ctk.CTkFont(size=10, weight="bold"), text_color=self.SCREEN_ACCENT
-            ).pack(anchor="w", pady=(0, 3))
+            lines = [ln.strip() for ln in text.strip().splitlines() if ln.strip()]
+            icons = ["🚀", "⚙️", "🛡️", "⚡"]
+            bullet_idx = 0
 
-            self._insert_formatted_markdown(inner, text, self.ASSISTANT_BUBBLE)
-            self.chat_scroll._parent_canvas.yview_moveto(1.0)
+            for idx, ln in enumerate(lines):
+                clean_ln = re.sub(r"\*\*(.*?)\*\*", r"<b>\1</b>", ln)
+                if idx == 0 and ("Online" in ln or "VERIFIED" in ln):
+                    plain = re.sub(r"<[^>]+>", "", clean_ln)
+                    title_lbl = QtWidgets.QLabel(plain)
+                    title_lbl.setWordWrap(True)
+                    title_lbl.setStyleSheet(
+                        "color: #26f0a8; font-family: 'Segoe UI'; font-size: 14px; font-weight: bold; border: none;"
+                    )
+                    c_vbox.addWidget(title_lbl)
+                elif ln.startswith(("•", "-", "*")):
+                    item_text = clean_ln.lstrip("•-* ").strip()
+                    feat_row = QtWidgets.QHBoxLayout()
+                    feat_row.setSpacing(10)
+                    ic = QtWidgets.QLabel(icons[bullet_idx % len(icons)])
+                    ic.setFixedSize(26, 26)
+                    ic.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+                    ic.setStyleSheet(
+                        "background-color: #0d2b38; color: #00e5ff; font-size: 14px; "
+                        "border: 1px solid #186478; border-radius: 6px;"
+                    )
+                    feat_row.addWidget(ic, 0, QtCore.Qt.AlignmentFlag.AlignTop)
+
+                    flbl = QtWidgets.QLabel(item_text)
+                    flbl.setWordWrap(True)
+                    flbl.setTextFormat(QtCore.Qt.TextFormat.RichText)
+                    flbl.setStyleSheet("color: #d6eaf2; font-family: 'Segoe UI'; font-size: 13px; border: none;")
+                    feat_row.addWidget(flbl, 1)
+                    c_vbox.addLayout(feat_row)
+                    bullet_idx += 1
+                else:
+                    blbl = QtWidgets.QLabel(clean_ln)
+                    blbl.setWordWrap(True)
+                    blbl.setTextFormat(QtCore.Qt.TextFormat.RichText)
+                    blbl.setStyleSheet("color: #dcebf2; font-family: 'Segoe UI'; font-size: 13px; border: none;")
+                    c_vbox.addWidget(blbl)
+
+            row_l.addWidget(card, 1)
+            self.chat_vbox.insertWidget(self.chat_vbox.count() - 1, row_w)
+            QtCore.QTimer.singleShot(30, self._scroll_chat_bottom)
+
         self.safe_call(_add)
+
+    def _scroll_chat_bottom(self):
+        bar = self.chat_scroll.verticalScrollBar()
+        bar.setValue(bar.maximum())
+
+    # =================================================================
+    # RIGHT PANEL: 2x2 TASK & MEMORY CARDS (Matching Reference Image)
+    # =================================================================
+    def _switch_right_tab(self, tab: str):
+        self.active_right_tab = tab
+        self.btn_tasks.setChecked(tab == "tasks")
+        self.btn_memory.setChecked(tab == "memory")
+        self.btn_tasks.update()
+        self.btn_memory.update()
+
+        if tab == "tasks":
+            self.right_panel_title.setText("Active Tasks & Reminders")
+            self.render_tasks(self._cached_tasks)
+        else:
+            self.right_panel_title.setText("Memory Inspector")
+            self.render_memories(self._cached_memories)
+
+    def _clear_cards_grid(self):
+        while self.cards_grid.count():
+            item = self.cards_grid.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+
+    def _create_cyber_card(
+        self,
+        badge_icon: str,
+        title_text: str,
+        footer_left: str,
+        is_teal_glow: bool = False,
+        on_action: Callable = None,
+        action_symbol: str = "✔",
+    ) -> QtWidgets.QFrame:
+        card = QtWidgets.QFrame()
+        card.setMinimumHeight(138)
+        if is_teal_glow:
+            card.setStyleSheet(
+                "QFrame { background-color: #0b222c; border: 1.5px solid #28b8a8; border-radius: 8px; }"
+            )
+        else:
+            card.setStyleSheet(
+                "QFrame { background-color: #0c1624; border: 1.5px solid #264862; border-radius: 8px; }"
+            )
+
+        vbox = QtWidgets.QVBoxLayout(card)
+        vbox.setContentsMargins(10, 10, 10, 8)
+        vbox.setSpacing(6)
+
+        top_r = QtWidgets.QHBoxLayout()
+        ic_lbl = QtWidgets.QLabel(badge_icon)
+        ic_lbl.setFixedSize(26, 26)
+        ic_lbl.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+        ic_lbl.setStyleSheet(
+            "background-color: #102a38; color: #48e5d0; font-size: 13px; "
+            "border: 1px solid #287a88; border-radius: 5px;"
+        )
+        top_r.addWidget(ic_lbl)
+        top_r.addStretch()
+        dots = QtWidgets.QLabel("•••")
+        dots.setStyleSheet("color: #6c92a4; font-size: 11px; border: none;")
+        top_r.addWidget(dots)
+        vbox.addLayout(top_r)
+
+        t_lbl = QtWidgets.QLabel(title_text)
+        t_lbl.setWordWrap(True)
+        t_lbl.setStyleSheet("color: #e4f2f8; font-family: 'Segoe UI'; font-size: 12px; font-weight: 600; border: none;")
+        vbox.addWidget(t_lbl, 1)
+
+        foot = QtWidgets.QFrame()
+        foot.setFixedHeight(24)
+        foot.setStyleSheet("background-color: #091420; border: 1px solid #183848; border-radius: 4px;")
+        f_hbox = QtWidgets.QHBoxLayout(foot)
+        f_hbox.setContentsMargins(6, 0, 6, 0)
+        fl_lbl = QtWidgets.QLabel(footer_left)
+        fl_lbl.setStyleSheet("color: #5ec8b8; font-family: 'Bahnschrift'; font-size: 10px; border: none;")
+        f_hbox.addWidget(fl_lbl)
+        f_hbox.addStretch()
+
+        if on_action:
+            act_btn = QtWidgets.QPushButton(action_symbol)
+            act_btn.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+            act_btn.setFixedSize(22, 18)
+            act_btn.setStyleSheet(
+                "QPushButton { background: transparent; color: #00f5d4; font-size: 11px; font-weight: bold; border: none; }"
+                "QPushButton:hover { color: #ffffff; }"
+            )
+            act_btn.clicked.connect(on_action)
+            f_hbox.addWidget(act_btn)
+        else:
+            icons_r = QtWidgets.QLabel("🕒 ❐")
+            icons_r.setStyleSheet("color: #6c9ab0; font-size: 10px; border: none;")
+            f_hbox.addWidget(icons_r)
+
+        vbox.addWidget(foot)
+        return card
+
+    def render_tasks(self, tasks: List[Dict[str, Any]]):
+        def _r():
+            self._cached_tasks = list(tasks)
+            if self.active_right_tab != "tasks":
+                return
+            self._clear_cards_grid()
+
+            # If user has no active tasks yet, show the 4 default operator status cards from the design
+            if not tasks:
+                placeholders = [
+                    ("☑", "Command Active\nOperator Online.", "T1/2", True),
+                    ("📋", "Notice Long Live\nReminders.", "T1/2", False),
+                    ("📅", "Tasks Card Status\nTarget Renders.", "T1/2", True),
+                    ("🔔", "Update Active\nTasks & Reminders.", "T2/2", False),
+                ]
+                for idx, (ic, title, ft, glow) in enumerate(placeholders):
+                    card = self._create_cyber_card(ic, title, ft, is_teal_glow=glow)
+                    self.cards_grid.addWidget(card, idx // 2, idx % 2)
+                return
+
+            badges = ["☑", "📋", "📅", "🔔"]
+            for idx, t in enumerate(tasks):
+                tid = t["id"]
+                card = self._create_cyber_card(
+                    badges[idx % len(badges)],
+                    t["title"],
+                    t.get("due_time", "T1/2")[-5:],
+                    is_teal_glow=(idx % 2 == 0),
+                    on_action=lambda _=False, task_id=tid: self.on_complete_task(task_id),
+                    action_symbol="✔",
+                )
+                self.cards_grid.addWidget(card, idx // 2, idx % 2)
+
+        self.safe_call(_r)
+
+    def render_memories(self, data: Dict[str, Any]):
+        def _rm():
+            self._cached_memories = dict(data)
+            if self.active_right_tab != "memory":
+                return
+            self._clear_cards_grid()
+
+            entries = []
+            for cat in ("profile", "workspace"):
+                for k, v in data.get(cat, {}).items():
+                    entries.append((cat, k, v.get("value", "")))
+
+            if not entries:
+                card = self._create_cyber_card("🧠", "No Saved Memories\nSay 'Remember that...'", "MEM 0/0", True)
+                self.cards_grid.addWidget(card, 0, 0, 1, 2)
+                return
+
+            for idx, (cat, k, val) in enumerate(entries):
+                card = self._create_cyber_card(
+                    "🧠",
+                    f"{k.title()}: {val}",
+                    cat.upper(),
+                    is_teal_glow=(idx % 2 == 0),
+                    on_action=lambda _=False, c=cat, key=k: self.on_delete_memory(c, key),
+                    action_symbol="✕",
+                )
+                self.cards_grid.addWidget(card, idx // 2, idx % 2)
+
+        self.safe_call(_rm)
+
+    # =================================================================
+    # THREAD-SAFE STATE & AUDIO ROUTING METHODS
+    # =================================================================
+    def set_status(self, text: str, color: str = "#10b981", disable_buttons: bool = False):
+        def _u():
+            self.spectrum_hud.set_status_display(text, color)
+            self.btn_vision_task.setEnabled(not disable_buttons)
+            self.btn_exec_send.setEnabled(not disable_buttons)
+            if not disable_buttons:
+                self.action_status_lbl.setText("BOTTOM COMMAND")
+        self.safe_call(_u)
+
+    def set_action_banner(self, text: str):
+        def _b():
+            self.action_status_lbl.setText(text.upper() if text else "BOTTOM COMMAND")
+        self.safe_call(_b)
+
+    def update_visualizer(self, levels: List[float]):
+        """Feeds user microphone levels into the top-center AudioSpectrumHUD."""
+        self.safe_call(lambda: self.spectrum_hud.push_external_mic_levels(levels))
+
+    def set_ai_voice_level(self, level: float):
+        """Feeds AI TTS voice levels into the left AtomicSolarHUD (Requirement 5)."""
+        self.safe_call(lambda: self.solar_hud.set_ai_voice_level(level))
 
     def update_input_box(self, text: str):
         def _s():
-            self.input_box.delete(0, "end")
-            self.input_box.insert(0, text)
-            self.input_box.focus_set()
+            self.input_box.setText(text)
+            self.input_box.setFocus()
         self.safe_call(_s)
 
     def show_screen_preview(self, image_path: str):
         def _sh():
-            try:
-                pil_img = Image.open(image_path)
-                ctk_img = ctk.CTkImage(light_image=pil_img, dark_image=pil_img, size=(96, 54))
-                self.preview_img_lbl.configure(image=ctk_img)
-                self.preview_img_lbl.image = ctk_img
-                self.preview_frame.grid(row=1, column=0, columnspan=4, sticky="ew", padx=12, pady=(8, 0))
-                self.after(6500, lambda: self.preview_frame.grid_forget())
-            except Exception:
-                pass
+            self.clean_preview.set_image(image_path)
         self.safe_call(_sh)
 
     def show_approval_prompt(self, payload: Dict[str, str]):
         def _p():
             txt = (
-                f"⚠️ {payload['level']}\n"
-                f"• Action: {payload['action']}\n"
-                f"• Target: {payload['target']}\n"
-                f"• Scope: {payload['scope']}\n"
-                f"• Consequences: {payload['consequences']}"
+                f"⚠️ {payload['level']}  |  Action: {payload['action']}  |  "
+                f"Target: {payload['target']}  |  Consequences: {payload['consequences']}"
             )
-            self.approval_lbl.configure(text=txt)
-            self.approval_frame.grid(row=2, column=0, sticky="ew", padx=18, pady=4)
+            self.approval_lbl.setText(txt)
+            self.approval_bar.show()
         self.safe_call(_p)
 
     def _resolve_approval(self, choice: str):
-        self.approval_frame.grid_forget()
+        self.approval_bar.hide()
         self.on_approval_decision(choice)
 
-    def render_tasks(self, tasks: List[Dict[str, Any]]):
-        def _r():
-            for c in self.task_list_scroll.winfo_children():
-                c.destroy()
-            self.btn_tasks.configure(text=f"Tasks ({len(tasks)})" if tasks else "Tasks")
-            if not tasks:
-                ctk.CTkLabel(self.task_list_scroll, text="No active tasks.", text_color=self.TEXT_MUTED).pack(pady=24)
-                return
-            for t in tasks:
-                row = ctk.CTkFrame(
-                    self.task_list_scroll, fg_color=self.CARD_ELEVATED, corner_radius=8,
-                    border_width=1, border_color=self.BORDER_SUBTLE
-                )
-                row.pack(fill="x", pady=4)
-                info = ctk.CTkFrame(row, fg_color="transparent")
-                info.pack(side="left", padx=8, pady=6, fill="x", expand=True)
-                p_tag = f"[{t.get('priority', 'medium').upper()}] "
-                ctk.CTkLabel(info, text=p_tag + t["title"], font=ctk.CTkFont(size=12, weight="bold"), anchor="w").pack(fill="x")
-                ctk.CTkLabel(info, text=f"🕒 {t['due_time']}", font=ctk.CTkFont(size=11), text_color=self.SCREEN_ACCENT, anchor="w").pack(fill="x")
-                ctk.CTkButton(
-                    row, text="+15m", width=42, height=24, font=ctk.CTkFont(size=10),
-                    fg_color="#282d3d", command=lambda tid=t["id"]: self.on_snooze_task(tid)
-                ).pack(side="right", padx=(2, 6))
-                ctk.CTkButton(
-                    row, text="✔", width=32, height=24, font=ctk.CTkFont(size=11),
-                    fg_color="#13382e", hover_color=self.STATUS_GREEN, command=lambda tid=t["id"]: self.on_complete_task(tid)
-                ).pack(side="right", padx=2)
-        self.safe_call(_r)
-
-    def render_memories(self, data: Dict[str, Any]):
-        def _rm():
-            for c in self.memory_list_scroll.winfo_children():
-                c.destroy()
-            total = len(data.get("profile", {})) + len(data.get("workspace", {}))
-            self.btn_memory.configure(text=f"Memory ({total})" if total else "Memory")
-            if total == 0:
-                ctk.CTkLabel(self.memory_list_scroll, text="No stored memories.", text_color=self.TEXT_MUTED).pack(pady=24)
-                return
-            for cat in ("profile", "workspace"):
-                items = data.get(cat, {})
-                for k, v in items.items():
-                    row = ctk.CTkFrame(self.memory_list_scroll, fg_color=self.CARD_ELEVATED, corner_radius=8)
-                    row.pack(fill="x", pady=3)
-                    lbl_txt = f"[{cat.upper()}] {k}: {v.get('value', '')}\n({v.get('updated_at', '')})"
-                    ctk.CTkLabel(row, text=lbl_txt, font=ctk.CTkFont(size=11), justify="left", anchor="w", wraplength=255).pack(side="left", padx=8, pady=6)
-                    ctk.CTkButton(
-                        row, text="✕", width=28, height=24, fg_color="#3b1d26", hover_color=self.STATUS_RED,
-                        command=lambda c_name=cat, k_name=k: self.on_delete_memory(c_name, k_name)
-                    ).pack(side="right", padx=6)
-        self.safe_call(_rm)
-
-    # ==========================================
-    # UI INTERACTION CALLBACKS
-    # ==========================================
-    def _quick_prompt(self, prompt: str, screen: bool = False):
-        self.add_user_bubble(f"🖥️ {prompt}" if screen else prompt)
-        if screen:
-            self.on_ask_screen(prompt)
-        else:
-            self.on_ask_text(prompt)
-
-    def toggle_task_panel(self):
-        self.task_panel_visible = not self.task_panel_visible
-        if self.task_panel_visible:
-            self.memory_panel_visible = False
-            self.memory_panel.place_forget()
-            self._animate_drawer_in(self.task_panel)
-        else:
-            self.task_panel.place_forget()
-
-    def toggle_memory_panel(self):
-        self.memory_panel_visible = not self.memory_panel_visible
-        if self.memory_panel_visible:
-            self.task_panel_visible = False
-            self.task_panel.place_forget()
-            self._animate_drawer_in(self.memory_panel)
-        else:
-            self.memory_panel.place_forget()
-
-    def toggle_pin(self):
-        self.is_pinned = not self.is_pinned
-        self.attributes("-topmost", self.is_pinned)
-        self.btn_pin.configure(fg_color=self.ACCENT if self.is_pinned else self.CARD_BG)
-
-    def toggle_mute(self):
-        self.is_muted = not self.is_muted
-        self.btn_mute.configure(
-            image=self.ico_mic_off if self.is_muted else self.ico_mic_on,
-            fg_color="#3b1d26" if self.is_muted else self.CARD_BG,
-        )
-        self.on_toggle_mute(self.is_muted)
-
-    def toggle_quiet(self):
-        self.is_quiet = not self.is_quiet
-        self.btn_quiet.configure(
-            image=self.ico_bell_off if self.is_quiet else self.ico_bell,
-            fg_color="#332614" if self.is_quiet else self.CARD_BG,
-        )
-        self.on_toggle_quiet(self.is_quiet)
-
-    def _handle_clear(self):
-        for c in self.chat_scroll.winfo_children():
-            c.destroy()
-        self.add_assistant_bubble("**Conversation cleared.** Ready for your next command.")
-        self.on_clear_chat()
-
-    def _handle_chat_click(self):
-        q = self.input_box.get().strip()
+    # =================================================================
+    # BUTTON CLICK HANDLERS
+    # =================================================================
+    def _handle_send_click(self):
+        q = self.input_box.text().strip()
         if not q:
             return
-        self.input_box.delete(0, "end")
+        self.input_box.clear()
         self.add_user_bubble(q)
         self.on_ask_text(q)
 
     def _handle_screen_click(self):
-        q = self.input_box.get().strip() or "Inspect the screen and help me with what is currently open."
-        self.input_box.delete(0, "end")
+        q = self.input_box.text().strip() or "Inspect the screen and help me with what is currently open."
+        self.input_box.clear()
         self.add_user_bubble(f"🖥️ [Vision Task]: {q}")
         self.on_ask_screen(q)
+
+    def _handle_clear_click(self):
+        while self.chat_vbox.count() > 1:
+            item = self.chat_vbox.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+        self.add_assistant_bubble("**Conversation cleared.**\nReady for your next command.")
+        self.on_clear_chat()
+
+    def _handle_pin_toggle(self):
+        self.is_pinned = self.btn_pin.isChecked()
+        self.setWindowFlag(QtCore.Qt.WindowType.WindowStaysOnTopHint, self.is_pinned)
+        self.show()
+
+    def _handle_mute_toggle(self):
+        self.is_muted = self.btn_mute.isChecked()
+        self.on_toggle_mute(self.is_muted)
+
+    def _handle_quiet_toggle(self):
+        self.is_quiet = self.btn_quiet.isChecked()
+        self.on_toggle_quiet(self.is_quiet)

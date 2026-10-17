@@ -1,19 +1,33 @@
 import re
+import math
 import time
+import random
 import queue
 import threading
 import pythoncom
 import win32com.client
+from typing import Callable, Optional
 from memory.config_manager import ConfigManager
 
 
 class TTSEngine:
-    def __init__(self, config: ConfigManager):
+    def __init__(self, config: ConfigManager, on_ai_audio_level: Optional[Callable[[float], None]] = None):
         self.config = config
+        self.on_ai_audio_level = on_ai_audio_level
         self.speech_queue = queue.Queue()
         self.stop_event = threading.Event()
         self.is_speaking = threading.Event()
         threading.Thread(target=self._worker, daemon=True).start()
+
+    def bind_ai_level_callback(self, callback: Callable[[float], None]):
+        self.on_ai_audio_level = callback
+
+    def _emit_level(self, val: float):
+        if self.on_ai_audio_level:
+            try:
+                self.on_ai_audio_level(val)
+            except Exception:
+                pass
 
     @staticmethod
     def clean_for_speech(text: str) -> str:
@@ -35,6 +49,7 @@ class TTSEngine:
         with self.speech_queue.mutex:
             self.speech_queue.queue.clear()
         self.speech_queue.put("__STOP__")
+        self._emit_level(0.0)
 
     def _worker(self):
         pythoncom.CoInitialize()
@@ -64,6 +79,7 @@ class TTSEngine:
             if text == "__STOP__":
                 speaker.Speak("", 2)
                 self.is_speaking.clear()
+                self._emit_level(0.0)
                 self.speech_queue.task_done()
                 continue
 
@@ -77,6 +93,7 @@ class TTSEngine:
                         speaker.Voice = george_voice or default_voice
 
                     sentences = re.split(r"(?<=[.!?]) +", text)
+                    t_start = time.time()
                     for sentence in sentences:
                         if self.stop_event.is_set():
                             speaker.Speak("", 2)
@@ -87,9 +104,22 @@ class TTSEngine:
                                 if self.stop_event.is_set():
                                     speaker.Speak("", 2)
                                     break
-                                time.sleep(0.04)
+                                # Generate natural syllable-cadence envelope while AI voice is speaking
+                                elapsed = time.time() - t_start
+                                syllable_wave = (
+                                    0.48
+                                    + 0.28 * math.sin(elapsed * 16.5)
+                                    + 0.18 * math.cos(elapsed * 9.2)
+                                    + random.uniform(-0.06, 0.12)
+                                )
+                                self._emit_level(max(0.15, min(1.0, syllable_wave)))
+                                time.sleep(0.03)
+                            # Brief inter-sentence dip
+                            self._emit_level(0.05)
+                            time.sleep(0.04)
                 finally:
-                    time.sleep(0.15)
+                    self._emit_level(0.0)
+                    time.sleep(0.12)
                     self.is_speaking.clear()
 
             self.speech_queue.task_done()

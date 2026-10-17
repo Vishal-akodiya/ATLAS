@@ -93,6 +93,7 @@ class AtlasOperator:
             on_toggle_quiet=self.handle_quiet_toggle,
             on_approval_decision=self.confirm.resolve,
         )
+        self.tts.bind_ai_level_callback(self.ui.set_ai_voice_level)
         self.confirm.bind_ui(self.ui.show_approval_prompt)
         self.screen_processor.bind_window_controls(
             hide_cb=lambda: self.ui.safe_call(self.ui.withdraw),
