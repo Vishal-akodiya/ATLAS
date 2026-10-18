@@ -31,3 +31,14 @@ Follow these steps to get ATLAS running on your Windows machine:
    ```env
    GEMINI_API_KEY=your_gemini_api_key_here
    GEMINI_MODEL=gemini-3.1-flash-lite
+   ```
+6. Start ATLAS with `python main.py`.
+
+## Reliability notes
+
+- Copy `.env.example` to `.env` and add your own `GEMINI_API_KEY` before launching. Keep `.env` private and never commit it.
+- Short reminders and timers support relative durations, including `in 5 seconds`, `in 2 minutes`, and quick-add entries such as `Water plants @ in 10 seconds`.
+- Reminder timestamps preserve seconds, task storage uses atomic/locked writes, and the scheduler checks every 0.35 seconds. Due reminders use a desktop sound alarm even without the optional Arduino.
+- Edge TTS has an offline `pyttsx3` fallback. Install dependencies with `pip install -r requirements.txt`; the TTS decoder (`miniaudio`) is included in that list.
+- The task panel uses full-width task rows with clear priority, due time, Done, and Snooze controls. Its short countdown labels refresh once per second.
+

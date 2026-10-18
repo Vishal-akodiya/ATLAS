@@ -7,6 +7,7 @@ import urllib.parse
 from datetime import datetime
 import psutil
 from memory.memory_manager import MemoryManager, WORKSPACE_DIR
+from actions.reminder import ReminderActions
 from core.confirm import ConfirmationGate
 
 
@@ -14,6 +15,7 @@ class ToolRegistry:
     def __init__(self, memory: MemoryManager, confirm_gate: ConfirmationGate):
         self.memory = memory
         self.confirm = confirm_gate
+        self.reminder_actions = ReminderActions(memory)
 
     def get_tools_list(self):
         return [
@@ -146,37 +148,17 @@ class ToolRegistry:
         except Exception as e:
             return f"FAILED: {e}"
 
-    def create_task(self, title: str, due_time_str: str) -> str:
-        """Schedules a reminder task. due_time_str MUST be in 'YYYY-MM-DD HH:MM' format."""
-        try:
-            datetime.strptime(due_time_str, "%Y-%m-%d %H:%M")
-            tasks = self.memory.load_tasks()
-            task_id = max([t["id"] for t in tasks] + [0]) + 1
-            new_task = {"id": task_id, "title": title, "due_time": due_time_str, "notified": False}
-            tasks.append(new_task)
-            self.memory.save_tasks(tasks)
-            self.memory.log_audit("create_task", 1, "VERIFIED", f"#{task_id} {title} @ {due_time_str}")
-            return f"SUCCESS: Verified Task #{task_id} ('{title}') scheduled for {due_time_str}."
-        except ValueError:
-            return "FAILED: Invalid time format. Must be 'YYYY-MM-DD HH:MM'."
+    def create_task(self, title: str, due_time_str: str, priority: str = "medium") -> str:
+        """Creates a reminder for an absolute time or a relative duration such as 'in 10 seconds'."""
+        return self.reminder_actions.create_task(title, due_time_str, priority)
 
     def list_tasks(self) -> str:
-        """Lists all active pending tasks and reminders."""
-        tasks = self.memory.get_active_tasks()
-        if not tasks:
-            return "No pending tasks."
-        return "\n".join([f"ID {t['id']}: {t['title']} (Due: {t['due_time']})" for t in tasks])
+        """Lists active pending tasks and reminders."""
+        return self.reminder_actions.list_tasks()
 
     def cancel_task(self, task_id: int) -> str:
-        """Marks a task ID as completed/cancelled."""
-        tasks = self.memory.load_tasks()
-        for t in tasks:
-            if t["id"] == int(task_id):
-                t["notified"] = True
-                self.memory.save_tasks(tasks)
-                self.memory.log_audit("cancel_task", 1, "VERIFIED", f"ID {task_id}")
-                return f"SUCCESS: Task #{task_id} completed/cancelled."
-        return f"FAILED: Task ID {task_id} not found."
+        """Marks a reminder as completed/cancelled."""
+        return self.reminder_actions.cancel_task(task_id)
 
     def save_memory(self, key: str, value: str) -> str:
         """Saves a user preference or project fact into persistent memory."""

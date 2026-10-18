@@ -246,7 +246,27 @@ class DesktopActions:
         return "FAILED: Screen Vision Processor is not attached."
 
     def minimize_window(self, title_substring: str) -> str:
-        return f"VERIFIED: Minimized {title_substring}."
+        matched_hwnd = []
+
+        def enum_cb(hwnd, _):
+            if user32.IsWindowVisible(hwnd):
+                length = user32.GetWindowTextLengthW(hwnd)
+                if length > 0:
+                    buf = ctypes.create_unicode_buffer(length + 1)
+                    user32.GetWindowTextW(hwnd, buf, length + 1)
+                    if title_substring.lower() in buf.value.lower():
+                        matched_hwnd.append((hwnd, buf.value))
+            return True
+
+        WNDENUMPROC = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_int, ctypes.c_int)
+        user32.EnumWindows(WNDENUMPROC(enum_cb), 0)
+        if not matched_hwnd:
+            return f"FAILED: No visible window found matching '{title_substring}'."
+
+        hwnd, full_title = matched_hwnd[0]
+        user32.ShowWindow(hwnd, 6)  # SW_MINIMIZE = 6
+        self.memory.log_audit("minimize_window", 1, "VERIFIED", full_title)
+        return f"VERIFIED: Minimized window '{full_title}'."
 
     def press_hotkey(self, keys_csv: str) -> str:
         if self.emergency_stop_event.is_set(): return "STOPPED."

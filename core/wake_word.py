@@ -76,7 +76,7 @@ class WakeWordListener:
                 self._followup_flag.clear()
                 self.is_busy = True
                 try:
-                    self.on_status_change("Atlas awake! Speak your question...", "#ef4444", True)
+                    self.on_status_change("Wake word detected · listening for command…", "#f59e0b", True)
                     audio = self.stt.capture_utterance(
                         wait_timeout=6.0,
                         silence_limit=1.0,
@@ -88,26 +88,45 @@ class WakeWordListener:
                         full_q = self.stt.transcribe(audio)
                         if full_q:
                             self.on_command_ready(full_q)
+                        else:
+                            self.on_status_change("Didn't catch that · listening for 'Atlas'…", "#f59e0b", False)
                     else:
-                        self.on_status_change("Ready", "#10b981", False)
+                        self.on_status_change("Listening for 'Atlas'…", "#10b981", False)
                 except sr.UnknownValueError:
-                    self.on_status_change("Could not catch that. Ready.", "#f59e0b", False)
-                except Exception:
-                    self.on_status_change("Ready", "#10b981", False)
+                    self.on_status_change("Didn't catch that · listening for 'Atlas'…", "#f59e0b", False)
+                except Exception as exc:
+                    print(f"[Wake Word] Follow-up capture failed: {exc}")
+                    self.on_status_change("Listening for 'Atlas'…", "#10b981", False)
                 finally:
                     self.is_busy = False
                 continue
 
-            # Passive wake-word capture: snaps shut 0.8s after speech ends
-            audio = self.stt.capture_utterance(
-                wait_timeout=1.5,
-                silence_limit=0.80,
-                max_duration=14.0,
-                abort_check=lambda: self.muted or self.is_busy or self.tts.is_speaking.is_set() or self._followup_flag.is_set(),
-            )
-            if audio and not self.tts.is_speaking.is_set() and not self.is_busy:
-                if not self._audio_queue.full():
-                    self._audio_queue.put_nowait(audio)
+            # Passive wake-word capture: snaps shut 0.8s after speech ends.
+            # A transient microphone/driver error must not permanently kill this thread.
+            try:
+                audio = self.stt.capture_utterance(
+                    wait_timeout=1.5,
+                    silence_limit=0.80,
+                    max_duration=14.0,
+                    abort_check=lambda: self.muted or self.is_busy or self.tts.is_speaking.is_set() or self._followup_flag.is_set(),
+                )
+                if audio and not self.tts.is_speaking.is_set() and not self.is_busy:
+                    try:
+                        self._audio_queue.put_nowait(audio)
+                    except queue.Full:
+                        # Drop the oldest buffered recording to keep wake detection responsive.
+                        try:
+                            self._audio_queue.get_nowait()
+                            self._audio_queue.task_done()
+                        except queue.Empty:
+                            pass
+                        try:
+                            self._audio_queue.put_nowait(audio)
+                        except queue.Full:
+                            pass
+            except Exception as exc:
+                print(f"[Wake Word] Passive capture failed: {exc}")
+                time.sleep(0.25)
 
     def _recognize_worker(self):
         while True:
@@ -122,26 +141,27 @@ class WakeWordListener:
                 # Immediate emergency stop detection
                 if low in STOP_COMMANDS:
                     self.on_emergency_stop()
-                    self._audio_queue.task_done()
                     continue
 
                 matched, command = self.match_wake_word(transcript)
                 if matched:
                     if command.lower() in ("stop", "cancel"):
                         self.on_emergency_stop()
-                        self._audio_queue.task_done()
                         continue
 
-                    self.tts.stop()
-                    self.on_wake_detected()
-                    if len(command.split()) >= 2:
-                        self.is_busy = True
-                        try:
-                            self.on_command_ready(command)
-                        finally:
-                            self.is_busy = False
-                    else:
+                    # Mark the listener busy before stopping TTS so the TTS-idle
+                    # callback cannot overwrite the wake-word status in the UI.
+                    self.is_busy = True
+                    if not command.strip():
                         self._followup_flag.set()
+                    try:
+                        self.tts.stop()
+                        self.on_wake_detected()
+                        if command.strip():
+                            self.on_status_change("Command captured · processing…", "#f59e0b", True)
+                            self.on_command_ready(command)
+                    finally:
+                        self.is_busy = False
             except (sr.UnknownValueError, sr.RequestError):
                 pass
             finally:

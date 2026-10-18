@@ -1,6 +1,7 @@
 import os
 import re
 import json
+import threading
 from datetime import datetime
 from typing import List, Dict, Any, Callable, Optional
 from memory.config_manager import WORKSPACE_DIR
@@ -23,6 +24,9 @@ class MemoryManager:
     ):
         self.on_tasks_updated = on_tasks_updated
         self.on_memories_updated = on_memories_updated
+        # Shared by reminder actions and the scheduler so simultaneous task updates
+        # cannot overwrite one another or leave a partially-written JSON file.
+        self.tasks_lock = threading.RLock()
         self._ensure_memory_structure()
 
     def _ensure_memory_structure(self):
@@ -141,19 +145,39 @@ class MemoryManager:
 
     # --- Durable Tasks & Reminders ---
     def load_tasks(self) -> List[Dict[str, Any]]:
-        if not os.path.exists(TASKS_FILE):
-            return []
-        try:
-            with open(TASKS_FILE, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except Exception:
-            return []
+        with self.tasks_lock:
+            if not os.path.exists(TASKS_FILE):
+                return []
+            try:
+                with open(TASKS_FILE, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                return data if isinstance(data, list) else []
+            except (OSError, json.JSONDecodeError, TypeError):
+                # Atomic writes prevent new partial files; this fallback keeps the
+                # assistant operational if an old/corrupt file is encountered.
+                return []
 
     def save_tasks(self, tasks: List[Dict[str, Any]]):
-        with open(TASKS_FILE, "w", encoding="utf-8") as f:
-            json.dump(tasks, f, indent=4)
+        os.makedirs(os.path.dirname(TASKS_FILE), exist_ok=True)
+        active = [
+            dict(task) for task in tasks
+            if task.get("status", "pending") == "pending" and not task.get("notified")
+        ]
+        with self.tasks_lock:
+            tmp_path = TASKS_FILE + ".tmp"
+            with open(tmp_path, "w", encoding="utf-8") as f:
+                json.dump(tasks, f, indent=4, ensure_ascii=False)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp_path, TASKS_FILE)
         if self.on_tasks_updated:
-            self.on_tasks_updated(self.get_active_tasks())
+            try:
+                self.on_tasks_updated(active)
+            except Exception as exc:
+                print(f"[Tasks] UI refresh failed: {exc}")
 
     def get_active_tasks(self) -> List[Dict[str, Any]]:
-        return [t for t in self.load_tasks() if t.get("status", "pending") == "pending" and not t.get("notified")]
+        return [
+            task for task in self.load_tasks()
+            if task.get("status", "pending") == "pending" and not task.get("notified")
+        ]

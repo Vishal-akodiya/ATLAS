@@ -64,11 +64,13 @@ class EdgeTTSEngine:
     def speak(self, text: str, player) -> None:
         loop = asyncio.new_event_loop()
         try:
-            audio_bytes = loop.run_until_complete(self._synth(text))
+            audio_bytes = loop.run_until_complete(asyncio.wait_for(self._synth(text), timeout=18.0))
         finally:
             loop.close()
         if audio_bytes and not player.stop_requested:
             _play_audio_bytes(audio_bytes)
+        elif not player.stop_requested:
+            raise RuntimeError("Edge TTS returned no audio data.")
 
     async def _synth(self, text: str) -> bytes:
         import edge_tts
@@ -168,14 +170,20 @@ class KokoroTTSEngine:
         synth_thread = threading.Thread(target=_synth, daemon=True)
         synth_thread.start()
         
-        # Audio plays immediately as chunk 1 arrives while chunk 2 synthesizes in the background
+        # Audio plays immediately as chunk 1 arrives while chunk 2 synthesizes in the background.
+        played_chunks = 0
         while not player.stop_requested:
             arr = audio_q.get()
-            if arr is None or player.stop_requested: break
+            if arr is None or player.stop_requested:
+                break
             _play_np(arr, 24000)
-            
+            played_chunks += 1
+
         synth_thread.join()
-        if synth_error: raise synth_error[0]
+        if synth_error:
+            raise synth_error[0]
+        if played_chunks == 0 and not player.stop_requested:
+            raise RuntimeError("Kokoro returned no audio chunks.")
 
 class ElevenLabsTTSEngine:
     def __init__(self, api_key: str, voice_id: str = "pNInz6obpgDQGcFmaJgB"):
@@ -191,38 +199,97 @@ class ElevenLabsTTSEngine:
         if not player.stop_requested:
             _play_audio_bytes(resp.content)
 
+class SystemTTSEngine:
+    """Offline Windows speech fallback used when network TTS or audio decoding fails."""
+
+    def __init__(self):
+        self._engine = None
+        self._init_lock = threading.Lock()
+
+    def speak(self, text: str, player) -> None:
+        import pyttsx3
+        with self._init_lock:
+            if self._engine is None:
+                self._engine = pyttsx3.init()
+            engine = self._engine
+        if player.stop_requested:
+            return
+        engine.say(text)
+        engine.runAndWait()
+
+    def stop(self) -> None:
+        engine = self._engine
+        if engine is not None:
+            try:
+                engine.stop()
+            except Exception:
+                pass
+
+
 class TTSPlayer:
-    def __init__(self, engine):
+    def __init__(self, engine, fallback=None, on_error: Optional[Callable[[str], None]] = None):
         self._engine = engine
+        self._fallback = fallback or SystemTTSEngine()
+        self._on_error = on_error
         self._playing = False
         self._lock = threading.Lock()
         self.stop_requested = False
 
+    def bind_error_callback(self, callback: Callable[[str], None]):
+        self._on_error = callback
+
     def speak(self, text: str) -> None:
+        with self._lock:
+            self._playing = True
+            self.stop_requested = False
         try:
-            with self._lock: 
-                self._playing = True
-                self.stop_requested = False
-            self._engine.speak(text, self)
-        except Exception as e: print(f"[TTS] Error: {e}")
+            try:
+                self._engine.speak(text, self)
+            except Exception as primary_error:
+                print(f"[TTS] Primary engine failed: {primary_error}")
+                if self.stop_requested:
+                    return
+                try:
+                    print("[TTS] Falling back to offline system speech.")
+                    self._fallback.speak(text, self)
+                except Exception as fallback_error:
+                    message = f"Primary engine: {primary_error}; offline fallback: {fallback_error}"
+                    print(f"[TTS] {message}")
+                    if self._on_error:
+                        try:
+                            self._on_error(message)
+                        except Exception:
+                            pass
         finally:
-            with self._lock: self._playing = False
+            with self._lock:
+                self._playing = False
 
     def stop(self) -> None:
         with self._lock:
             self.stop_requested = True
-        sd.stop()
+        try:
+            sd.stop()
+        except Exception:
+            pass
+        try:
+            self._fallback.stop()
+        except Exception:
+            pass
         self._playing = False
 
-def create_tts_player(config: dict) -> TTSPlayer:
-    engine_name = config.get("tts_engine", "edgetts").lower()
+
+def create_tts_player(config: dict, on_error: Optional[Callable[[str], None]] = None) -> TTSPlayer:
+    engine_name = str(config.get("tts_engine", "edgetts")).lower()
     if engine_name == "kokoro":
         engine = KokoroTTSEngine(voice=config.get("tts_voice", "af_heart"), speed=float(config.get("tts_speed", 1.0)))
     elif engine_name == "elevenlabs":
-        engine = ElevenLabsTTSEngine(api_key=config.get("elevenlabs_api_key", ""), voice_id=config.get("tts_voice", "pNInz6obpgDQGcFmaJgB"))
+        engine = ElevenLabsTTSEngine(
+            api_key=config.get("elevenlabs_api_key", ""),
+            voice_id=config.get("tts_voice", "pNInz6obpgDQGcFmaJgB"),
+        )
     else:
         engine = EdgeTTSEngine(voice=config.get("tts_voice", "en-US-GuyNeural"))
-    return TTSPlayer(engine)
+    return TTSPlayer(engine, fallback=SystemTTSEngine(), on_error=on_error)
 
 class TTSEngine:
     def __init__(self, config: ConfigManager, on_ai_audio_level: Optional[Callable[[float], None]] = None):
@@ -234,11 +301,36 @@ class TTSEngine:
 
         cfg_dict = {
             "tts_engine": self.config.get("tts_engine", "edgetts"),
-            "tts_voice": self.config.get("tts_voice", "en-US-GuyNeural")
+            "tts_voice": self.config.get("tts_voice", "en-US-GuyNeural"),
+            "tts_speed": self.config.get("tts_speed", 1.0),
+            "elevenlabs_api_key": self.config.get("elevenlabs_api_key", os.getenv("ELEVENLABS_API_KEY", "")),
         }
-        self.player = create_tts_player(cfg_dict)
+        self.player = create_tts_player(cfg_dict, on_error=self._report_error)
+        self.on_error_callback: Optional[Callable[[str], None]] = None
+        self.on_state_callback: Optional[Callable[[str], None]] = None
 
-        threading.Thread(target=self._worker, daemon=True).start()
+        threading.Thread(target=self._worker, daemon=True, name="ATLAS-TTS").start()
+
+    def bind_error_callback(self, callback: Callable[[str], None]):
+        self.on_error_callback = callback
+        self.player.bind_error_callback(self._report_error)
+
+    def _report_error(self, message: str):
+        if self.on_error_callback:
+            try:
+                self.on_error_callback(message)
+            except Exception:
+                pass
+
+    def bind_state_callback(self, callback: Callable[[str], None]):
+        self.on_state_callback = callback
+
+    def _emit_state(self, state: str):
+        if self.on_state_callback:
+            try:
+                self.on_state_callback(state)
+            except Exception:
+                pass
 
     def bind_ai_level_callback(self, callback: Callable[[float], None]):
         self.on_ai_audio_level = callback
@@ -277,11 +369,13 @@ class TTSEngine:
                 self.player.stop()
                 self.is_speaking.clear()
                 self._emit_level(0.0)
+                self._emit_state("idle")
                 self.speech_queue.task_done()
                 continue
 
             if text and not self.stop_event.is_set() and not self.config.get("quiet_mode", False):
                 self.is_speaking.set()
+                self._emit_state("speaking")
 
                 def _sim_levels():
                     t_start = time.time()
@@ -301,6 +395,7 @@ class TTSEngine:
                 finally:
                     self.is_speaking.clear()
                     self._emit_level(0.0)
+                    self._emit_state("idle")
                     time.sleep(0.12)
 
             self.speech_queue.task_done()

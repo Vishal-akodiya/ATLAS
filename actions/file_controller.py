@@ -115,7 +115,7 @@ class FileController:
         if not approved:
             return f"CANCELLED: Move denied ({reason})."
 
-        self.undo.backup_file(src, "move_file")
+        self.undo.backup_file(src, "move_file", target_path=dst)
         shutil.move(src, dst)
         if os.path.exists(dst) and not os.path.exists(src):
             self.memory.log_audit("move_file", 2, "VERIFIED", f"{os.path.basename(src)}->{os.path.basename(dst)}")

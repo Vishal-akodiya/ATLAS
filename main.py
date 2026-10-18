@@ -3,7 +3,7 @@ import time
 import threading
 from datetime import datetime
 import speech_recognition as sr
-import serial  # Added for Arduino communication
+import serial
 
 from memory.config_manager import ConfigManager
 from memory.memory_manager import MemoryManager
@@ -13,7 +13,6 @@ from core.tts import TTSEngine
 from core.stt import STTEngine
 from core.wake_word import WakeWordListener
 from core.gemini import GeminiEngine
-
 from actions.desktop import DesktopActions
 from actions.screen_processor import ScreenProcessor
 from actions.file_controller import FileController
@@ -41,13 +40,9 @@ class AtlasOperator:
         self.confirm = ConfirmationGate()
         self.undo = UndoManager()
 
-        # ==========================================
-        # ARDUINO HARDWARE INITIALIZATION
-        # ==========================================
         self.arduino = None
         try:
-            # Connect to Arduino on COM6 at 9600 baud
-            self.arduino = serial.Serial('COM6', 9600, timeout=1)
+            self.arduino = serial.Serial("COM6", 9600, timeout=1)
             print("Successfully connected to Arduino on COM6.")
         except Exception as e:
             print(f"Arduino not detected on COM6: {e}. ATLAS will run without hardware alarms.")
@@ -75,6 +70,7 @@ class AtlasOperator:
 
         self.tts = TTSEngine(self.config)
         self.stt = STTEngine(on_visualizer_level=lambda bars: self.ui.update_visualizer(bars) if self.ui else None)
+
         self.gemini = GeminiEngine(self._build_tool_list())
         self.screen_processor.bind_gemini(self.gemini)
 
@@ -86,14 +82,25 @@ class AtlasOperator:
             on_clear_chat=self.gemini.reset_chat,
             on_complete_task=self.reminder_actions.cancel_task,
             on_snooze_task=lambda tid: self.reminder_actions.snooze_task(tid, 15),
+            on_create_task=self._ui_create_task,
+            on_save_memory=self._ui_save_memory,
             on_delete_memory=self._ui_delete_memory,
+            on_refresh_screen=self._ui_refresh_screen,
+            on_read_logs=lambda: self.memory.read_recent_logs(35),
             on_undo=self.handle_undo,
             on_briefing=self.handle_daily_briefing,
             on_toggle_mute=self.handle_mute_toggle,
             on_toggle_quiet=self.handle_quiet_toggle,
             on_approval_decision=self.confirm.resolve,
         )
+
         self.tts.bind_ai_level_callback(self.ui.set_ai_voice_level)
+        self.tts.bind_state_callback(self._handle_tts_state)
+        self.tts.bind_error_callback(
+            lambda message: self.ui.set_action_banner(
+                "Speech output unavailable · check audio device / offline voice"
+            ) if self.ui else None
+        )
         self.confirm.bind_ui(self.ui.show_approval_prompt)
         self.screen_processor.bind_window_controls(
             hide_cb=lambda: self.ui.safe_call(self.ui.withdraw),
@@ -103,29 +110,121 @@ class AtlasOperator:
         self.wake_listener = WakeWordListener(
             stt=self.stt,
             tts=self.tts,
-            on_wake_detected=lambda: self.ui.set_status("Atlas Awake!", "#ef4444", True),
+            on_wake_detected=lambda: self.ui.set_status(
+                "Wake word detected · listening for command…", "#f59e0b", True
+            ),
             on_command_ready=self.handle_voice_command,
             on_emergency_stop=self.handle_emergency_stop,
             on_status_change=self.ui.set_status,
         )
 
-    # ==========================================
-    # HARDWARE TRIGGERS
-    # ==========================================
+    def _handle_tts_state(self, state: str):
+        if not self.ui:
+            return
+        listener = getattr(self, "wake_listener", None)
+        if state == "speaking":
+            self.ui.set_status("ATLAS speaking…", "#06b6d4", False)
+            return
+        if self.is_processing:
+            return
+        if listener and (
+            listener.is_busy or listener._followup_flag.is_set() or listener.muted
+        ):
+            return
+        self.ui.set_status("Listening for 'Atlas'…", "#10b981", False)
+
     def trigger_hardware_alarm(self):
-        """Sends the 'A' byte to the Arduino to play the buzzer sequence."""
+        """Play a local alarm even when the optional Arduino is disconnected."""
+        threading.Thread(target=self._play_desktop_alarm, daemon=True).start()
         if self.arduino and self.arduino.is_open:
             try:
-                self.arduino.write(b'A')
+                self.arduino.write(b"A")
             except Exception as e:
                 print(f"Failed to trigger Arduino: {e}")
 
-    # ==========================================
-    # INSTANT LOCAL REFLEX ROUTER (< 0.05s)
-    # ==========================================
+    @staticmethod
+    def _play_desktop_alarm():
+        try:
+            import winsound
+            for frequency, duration_ms in ((880, 220), (1100, 260), (880, 220)):
+                winsound.Beep(frequency, duration_ms)
+            return
+        except Exception as exc:
+            print(f"[Alarm] Windows beep unavailable; trying audio output: {exc}")
+
+        try:
+            import numpy as np
+            import sounddevice as sd
+            sample_rate = 44100
+            tone_parts = []
+            for frequency in (880, 1100, 880):
+                count = int(sample_rate * 0.22)
+                t = np.arange(count, dtype=np.float32) / sample_rate
+                tone = (0.22 * np.sin(2 * np.pi * frequency * t)).astype(np.float32)
+                fade = max(1, int(sample_rate * 0.012))
+                tone[:fade] *= np.linspace(0.0, 1.0, fade, dtype=np.float32)
+                tone[-fade:] *= np.linspace(1.0, 0.0, fade, dtype=np.float32)
+                tone_parts.extend((tone, np.zeros(int(sample_rate * 0.07), dtype=np.float32)))
+            sd.play(np.concatenate(tone_parts), sample_rate)
+            sd.wait()
+        except Exception as exc:
+            print(f"[Alarm] Could not play desktop alarm: {exc}")
+
+    def _try_quick_reminder(self, prompt: str) -> str | None:
+        """Handle simple relative timers locally so short alarms don't depend on Gemini."""
+        duration_pattern = r"\d+(?:\.\d+)?\s*(?:seconds?|secs?|s|minutes?|mins?|m|hours?|hrs?|h|days?|d)"
+        duration_match = re.search(
+            rf"\b(?:in|after|for)\s+(?P<duration>{duration_pattern})\b",
+            prompt,
+            flags=re.IGNORECASE,
+        )
+        if not duration_match:
+            duration_match = re.search(
+                rf"\b(?P<duration>{duration_pattern})\s+(?:from\s+now)\b",
+                prompt,
+                flags=re.IGNORECASE,
+            )
+        if not duration_match or not re.search(r"\b(remind(?:er)?|timer|alarm)\b", prompt, re.IGNORECASE):
+            return None
+
+        duration = duration_match.group("duration")
+        due_text = f"in {duration}"
+        title = "Reminder"
+        title_match = re.search(
+            rf"\bremind\s+me\s+to\s+(.+?)\s+(?:in|after)\s+{duration_pattern}\b",
+            prompt,
+            flags=re.IGNORECASE,
+        )
+        if title_match:
+            title = title_match.group(1).strip(" .,!?:;") or title
+        else:
+            set_match = re.search(
+                rf"\b(?:set|create|start)\s+(?:a[n]?\s+)?(?P<kind>timer|reminder|alarm)\s+(?:for|in|after)\s+{duration_pattern}(?:\s+(?:to|for)\s+(?P<title>.+))?$",
+                prompt,
+                flags=re.IGNORECASE,
+            )
+            if set_match:
+                title = (set_match.group("title") or set_match.group("kind")).strip(" .,!?:;")
+            else:
+                follow_match = re.search(
+                    rf"\bremind\s+me\s+(?:in|after)\s+{duration_pattern}(?:\s+(?:to|for)\s+(?P<title>.+))?$",
+                    prompt,
+                    flags=re.IGNORECASE,
+                )
+                if follow_match and follow_match.group("title"):
+                    title = follow_match.group("title").strip(" .,!?:;")
+
+        if not title:
+            title = "Reminder"
+        return self.reminder_actions.create_task(title, due_text, "high" if "alarm" in prompt.lower() else "medium")
+
     def _try_instant_reflex(self, prompt: str) -> str | None:
         clean = prompt.strip()
         low = clean.lower()
+
+        quick_reminder = self._try_quick_reminder(clean)
+        if quick_reminder:
+            return quick_reminder
 
         wa_match = re.search(
             r"(?:send\s+(?:a\s+)?(?:whatsapp\s+)?(?:message\s+)?to|whatsapp)\s+([a-zA-Z0-9_ \-]+?)\s+(?:saying|that|message|:)\s+(.+)$",
@@ -148,18 +247,14 @@ class AtlasOperator:
 
         if low in ("what time is it", "what time is it?", "current time", "tell me the time", "what is the time"):
             return f"It is currently **{self.get_current_time()}**."
-
         if low in ("check my cpu, ram, and disk space status.", "system status", "check system status", "system health"):
             return self.sys_actions.check_system_status()
-
         if low in ("list the applications installed on my computer.", "list installed apps", "show installed apps"):
             return self.desktop_actions.list_installed_apps()
-
         if low in ("list tasks", "show my tasks", "what are my tasks", "show reminders"):
             return self.reminder_actions.list_tasks()
-
         if low in ("undo", "undo last action", "undo that"):
-            return f"↩️ **{self.undo.undo_last()}**"
+            return f"**{self.undo.undo_last()}**"
 
         return None
 
@@ -240,12 +335,26 @@ class AtlasOperator:
             self.proactive.generate_daily_briefing,
         ]
 
+    def _ui_create_task(self, title: str, due_str: str, priority: str = "medium"):
+        result = self.reminder_actions.create_task(title, due_str, priority)
+        if self.ui:
+            self.ui.add_assistant_bubble(f"**{result}**")
+
+    def _ui_save_memory(self, category: str, key: str, value: str):
+        self.save_user_memory(category, key, value)
+
     def _ui_delete_memory(self, category: str, key: str):
         self.memory.delete_memory(category, key)
 
+    def _ui_refresh_screen(self):
+        threading.Thread(
+            target=lambda: self.screen_processor.capture_raw_screen(hide_atlas=True),
+            daemon=True,
+        ).start()
+
     def handle_undo(self):
         msg = self.undo.undo_last()
-        self.ui.add_assistant_bubble(f"↩️ **{msg}**")
+        self.ui.add_assistant_bubble(f"**{msg}**")
         self.tts.speak(msg)
 
     def handle_daily_briefing(self):
@@ -255,7 +364,7 @@ class AtlasOperator:
 
     def handle_mute_toggle(self, is_muted: bool):
         self.wake_listener.muted = is_muted
-        self.ui.set_status("Mic Muted" if is_muted else "Ready", "#94a3b8" if is_muted else "#10b981", False)
+        self.ui.set_status("Mic Muted" if is_muted else "Listening for 'Atlas'…", "#94a3b8" if is_muted else "#10b981", False)
 
     def handle_quiet_toggle(self, is_quiet: bool):
         self.config.set("quiet_mode", is_quiet)
@@ -287,7 +396,7 @@ class AtlasOperator:
         self.is_processing = True
         self.wake_listener.is_busy = True
         self.tts.stop()
-        self.ui.set_status("Listening...", "#ef4444", True)
+        self.ui.set_status("Listening for your command…", "#ef4444", True)
         try:
             audio = self.stt.capture_utterance(wait_timeout=6.0, silence_limit=0.90, max_duration=25.0)
             if audio:
@@ -308,9 +417,10 @@ class AtlasOperator:
 
     def handle_voice_command(self, transcript: str):
         self.ui.update_input_box(transcript)
+        self.ui.set_status("Command captured · processing…", "#f59e0b", True)
         screen_keywords = ("screen", "click", "button", "window", "type here", "look at", "whatsapp")
-        needs_screen = any(kw in transcript.lower() for kw in screen_keywords)
-        prefix = "🎙️ 🖥️ [Vision]: " if needs_screen else "🎙️ "
+        needs_screen = any(kw in transcript.lower() for kw in screen_keywords) or (self.ui.operator_mode == "VISION")
+        prefix = "[Vision] " if needs_screen else "[Voice] "
         self.ui.add_user_bubble(f"{prefix}{transcript}")
         self._run_gemini(transcript, with_screen=needs_screen)
 
@@ -340,29 +450,34 @@ class AtlasOperator:
         finally:
             self.is_processing = False
             self.wake_listener.is_busy = False
-            self.ui.set_status("Ready", "#10b981", False)
+            if self.tts.is_speaking.is_set():
+                self.ui.set_status("ATLAS speaking…", "#06b6d4", False)
+            else:
+                self.ui.set_status("Listening for 'Atlas'…", "#10b981", False)
 
-    # ==========================================
-    # BACKGROUND PROACTIVE LOOP (Handles Triggers)
-    # ==========================================
     def _proactive_loop(self):
+        # Sub-second polling preserves short timers; notified flags prevent repeats.
         while True:
-            time.sleep(12)
-            alerts = self.proactive.check_due_and_nudges()
+            time.sleep(0.35)
+            try:
+                alerts = self.proactive.check_due_and_nudges()
+            except Exception as exc:
+                print(f"[Reminder Scheduler] Check failed: {exc}")
+                continue
             for ui_msg, tts_msg in alerts:
                 self.ui.add_assistant_bubble(ui_msg)
-                self.tts.speak(tts_msg)
-                
-                # If the alert is an actual reminder due (not just an upcoming nudge)
                 if "Reminder Due" in ui_msg:
                     self.trigger_hardware_alarm()
+                self.tts.speak(tts_msg)
 
     def run(self):
         self.ui.render_tasks(self.memory.get_active_tasks())
         self.ui.render_memories(self.memory.load_all_memories())
+        self.ui.set_status("Listening for 'Atlas'…", "#10b981", False)
         self.wake_listener.start()
         threading.Thread(target=self._proactive_loop, daemon=True).start()
         self.ui.mainloop()
+
 
 if __name__ == "__main__":
     app = AtlasOperator()
