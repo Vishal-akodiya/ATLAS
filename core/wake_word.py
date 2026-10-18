@@ -86,6 +86,7 @@ class WakeWordListener:
                     if audio:
                         self.on_status_change("Transcribing...", "#f59e0b", True)
                         full_q = self.stt.transcribe(audio)
+                        self.tts.set_language(self.stt.last_language)
                         if full_q:
                             self.on_command_ready(full_q)
                         else:
@@ -145,6 +146,7 @@ class WakeWordListener:
 
                 matched, command = self.match_wake_word(transcript)
                 if matched:
+                    self.tts.set_language(self.stt.last_language)
                     if command.lower() in ("stop", "cancel"):
                         self.on_emergency_stop()
                         continue
@@ -164,5 +166,8 @@ class WakeWordListener:
                         self.is_busy = False
             except (sr.UnknownValueError, sr.RequestError):
                 pass
+            except Exception as exc:
+                print(f"[Wake Word] Recognition worker recovered from error: {type(exc).__name__}: {exc}")
+                time.sleep(0.25)
             finally:
                 self._audio_queue.task_done()

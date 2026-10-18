@@ -402,6 +402,7 @@ class AtlasOperator:
             if audio:
                 self.ui.set_status("Transcribing...", "#f59e0b", True)
                 transcript = self.stt.transcribe(audio)
+                self.tts.set_language(self.stt.last_language)
                 if transcript:
                     self.handle_voice_command(transcript)
             else:
@@ -446,7 +447,10 @@ class AtlasOperator:
             self.ui.add_assistant_bubble(reply)
             self.tts.speak(reply)
         except Exception as e:
-            self.ui.add_assistant_bubble(f"**Execution Error:** {e}")
+            print(f"[ATLAS] Request failed: {type(e).__name__}: {e}")
+            self.ui.add_assistant_bubble(
+                f"**Request failed:** {e}\n\nCheck your internet connection or Gemini API quota, then try again."
+            )
         finally:
             self.is_processing = False
             self.wake_listener.is_busy = False

@@ -61,7 +61,12 @@ class EdgeTTSEngine:
     def __init__(self, voice: str = "en-US-GuyNeural"):
         self.voice = voice
 
-    def speak(self, text: str, player) -> None:
+    def speak(self, text: str, player, language: str = "en") -> None:
+        # Match the neural voice to the language the user spoke most recently.
+        if language == "hi":
+            self.voice = "hi-IN-SwaraNeural"
+        else:
+            self.voice = "en-IN-NeerjaNeural"
         loop = asyncio.new_event_loop()
         try:
             audio_bytes = loop.run_until_complete(asyncio.wait_for(self._synth(text), timeout=18.0))
@@ -206,12 +211,23 @@ class SystemTTSEngine:
         self._engine = None
         self._init_lock = threading.Lock()
 
-    def speak(self, text: str, player) -> None:
+    def speak(self, text: str, player, language: str = "en") -> None:
         import pyttsx3
         with self._init_lock:
             if self._engine is None:
                 self._engine = pyttsx3.init()
             engine = self._engine
+            # Use a native Hindi Windows voice when one is installed; otherwise keep
+            # the system default rather than selecting an unrelated voice.
+            if language == "hi":
+                try:
+                    for voice in engine.getProperty("voices"):
+                        details = f"{getattr(voice, 'id', '')} {getattr(voice, 'name', '')} {getattr(voice, 'languages', [])}".lower()
+                        if any(marker in details for marker in ("hindi", "hi-in", "0x439", "\\x05\\x39")):
+                            engine.setProperty("voice", voice.id)
+                            break
+                except Exception:
+                    pass
         if player.stop_requested:
             return
         engine.say(text)
@@ -238,20 +254,26 @@ class TTSPlayer:
     def bind_error_callback(self, callback: Callable[[str], None]):
         self._on_error = callback
 
-    def speak(self, text: str) -> None:
+    def speak(self, text: str, language: str = "en") -> None:
         with self._lock:
             self._playing = True
             self.stop_requested = False
         try:
             try:
-                self._engine.speak(text, self)
+                if isinstance(self._engine, EdgeTTSEngine):
+                    self._engine.speak(text, self, language=language)
+                else:
+                    self._engine.speak(text, self)
             except Exception as primary_error:
                 print(f"[TTS] Primary engine failed: {primary_error}")
                 if self.stop_requested:
                     return
                 try:
                     print("[TTS] Falling back to offline system speech.")
-                    self._fallback.speak(text, self)
+                    if isinstance(self._fallback, SystemTTSEngine):
+                        self._fallback.speak(text, self, language=language)
+                    else:
+                        self._fallback.speak(text, self)
                 except Exception as fallback_error:
                     message = f"Primary engine: {primary_error}; offline fallback: {fallback_error}"
                     print(f"[TTS] {message}")
@@ -296,6 +318,8 @@ class TTSEngine:
         self.config = config
         self.on_ai_audio_level = on_ai_audio_level
         self.speech_queue = queue.Queue()
+        self.current_language = "en"
+        self._language_lock = threading.Lock()
         self.stop_event = threading.Event()
         self.is_speaking = threading.Event()
 
@@ -347,12 +371,19 @@ class TTSEngine:
         text = re.sub(r"\[(.*?)\]\(.*?\)", r"\1", text)
         return text.strip()
 
-    def speak(self, text: str):
+    def set_language(self, language: str):
+        """Set the TTS language from the latest recognized user utterance."""
+        with self._language_lock:
+            self.current_language = "hi" if str(language).lower().startswith("hi") else "en"
+
+    def speak(self, text: str, language: Optional[str] = None):
         if self.config.get("quiet_mode", False): return
         cleaned = self.clean_for_speech(text)
         if cleaned:
             self.stop_event.clear()
-            self.speech_queue.put(cleaned)
+            with self._language_lock:
+                lang = language or self.current_language
+            self.speech_queue.put((cleaned, lang))
 
     def stop(self):
         self.stop_event.set()
@@ -364,8 +395,8 @@ class TTSEngine:
 
     def _worker(self):
         while True:
-            text = self.speech_queue.get()
-            if text == "__STOP__":
+            item = self.speech_queue.get()
+            if item == "__STOP__":
                 self.player.stop()
                 self.is_speaking.clear()
                 self._emit_level(0.0)
@@ -373,6 +404,7 @@ class TTSEngine:
                 self.speech_queue.task_done()
                 continue
 
+            text, language = item if isinstance(item, tuple) else (item, "en")
             if text and not self.stop_event.is_set() and not self.config.get("quiet_mode", False):
                 self.is_speaking.set()
                 self._emit_state("speaking")
@@ -391,7 +423,7 @@ class TTSEngine:
                 try:
                     # Pass the full text block directly to the player.
                     # This leverages Kokoro's native thread pipeline and EdgeTTS batching.
-                    self.player.speak(text)
+                    self.player.speak(text, language=language)
                 finally:
                     self.is_speaking.clear()
                     self._emit_level(0.0)

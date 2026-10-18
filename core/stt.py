@@ -13,9 +13,13 @@ class STTEngine:
 
     def __init__(self, on_visualizer_level: Optional[Callable[[List[float]], None]] = None):
         self.recognizer = sr.Recognizer()
+        # Hard limit network-backed speech recognition so a stalled request
+        # cannot block the wake-word worker indefinitely.
+        self.recognizer.operation_timeout = 7.0
         self.mic_lock = threading.Lock()
         self.on_visualizer_level = on_visualizer_level
         self.ambient_rms = 180.0
+        self.last_language = "en"
         self._pa = pyaudio.PyAudio()
         # Move calibration to background thread so UI launches instantly
         threading.Thread(target=self.calibrate_ambient, daemon=True).start()
@@ -146,4 +150,25 @@ class STTEngine:
                 stream.close()
 
     def transcribe(self, audio: sr.AudioData) -> str:
-        return self.recognizer.recognize_google(audio)
+        """Recognize speech with a bounded network wait and language fallback."""
+        last_unknown = None
+        # Use the user's most recently successful language first. This avoids
+        # always interpreting Hindi as English and avoids unnecessary extra calls.
+        preferred = "hi-IN" if self.last_language == "hi" else "en-IN"
+        alternatives = [preferred, "en-IN" if preferred == "hi-IN" else "hi-IN"]
+        for language in alternatives:
+            try:
+                text = self.recognizer.recognize_google(audio, language=language)
+                if text and text.strip():
+                    self.last_language = "hi" if language == "hi-IN" else "en"
+                    return text.strip()
+            except sr.UnknownValueError as exc:
+                last_unknown = exc
+                continue
+            except sr.RequestError as exc:
+                # A request/network error should return control immediately;
+                # don't repeat the same recording against another locale.
+                raise RuntimeError(f"Speech recognition network/service error: {exc}") from exc
+        if last_unknown:
+            raise last_unknown
+        return ""
