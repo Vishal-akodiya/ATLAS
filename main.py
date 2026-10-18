@@ -1,9 +1,12 @@
+import os
+import sys
 import re
 import time
 import threading
 from datetime import datetime
 import speech_recognition as sr
 import serial
+from PySide6 import QtCore, QtWidgets, QtGui
 
 from memory.config_manager import ConfigManager
 from memory.memory_manager import MemoryManager
@@ -23,6 +26,105 @@ from actions.system_monitor import SystemMonitorActions
 from actions.proactive import ProactiveEngine
 from ui import AtlasUI
 
+class AtlasSetupDialog(QtWidgets.QDialog):
+    """Custom ATLAS-styled popup for initial API Key configuration."""
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("ATLAS Core Initialization")
+        self.setFixedSize(520, 240)
+        self.setStyleSheet("QDialog { background-color: #050a12; }")
+        self.setWindowFlags(QtCore.Qt.WindowType.FramelessWindowHint | QtCore.Qt.WindowType.WindowStaysOnTopHint)
+        
+        layout = QtWidgets.QVBoxLayout(self)
+        layout.setContentsMargins(20, 20, 20, 20)
+        
+        # Cybernetic Frame
+        frame = QtWidgets.QFrame(self)
+        frame.setStyleSheet("QFrame { background-color: #08111c; border: 1.5px solid #1b4357; border-radius: 8px; }")
+        frame_layout = QtWidgets.QVBoxLayout(frame)
+        frame_layout.setSpacing(14)
+        
+        # Title
+        title = QtWidgets.QLabel("ATLAS INITIAL SETUP")
+        title.setStyleSheet("color: #00f5d4; font-family: 'Bahnschrift'; font-size: 16px; font-weight: bold; border: none;")
+        title.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+        frame_layout.addWidget(title)
+
+        # Description
+        desc = QtWidgets.QLabel("Welcome to ATLAS. Please provide your Gemini API Key to initialize the AI vision and operating engine.")
+        desc.setStyleSheet("color: #6fb8c4; font-family: 'Segoe UI'; font-size: 13px; border: none;")
+        desc.setWordWrap(True)
+        frame_layout.addWidget(desc)
+
+        # Input Box
+        self.key_input = QtWidgets.QLineEdit()
+        self.key_input.setPlaceholderText("Enter your Gemini API Key here...")
+        self.key_input.setStyleSheet("QLineEdit { background: #091320; color: #e2f1f8; border: 1px solid #1d495e; border-radius: 5px; padding: 8px; font-family: 'Consolas'; font-size: 13px; }")
+        frame_layout.addWidget(self.key_input)
+
+        # Buttons
+        btn_layout = QtWidgets.QHBoxLayout()
+        btn_layout.addStretch()
+        
+        self.btn_exit = QtWidgets.QPushButton("EXIT")
+        self.btn_exit.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+        self.btn_exit.setStyleSheet("""
+            QPushButton { background-color: #211018; color: #ff4d5e; font-family: 'Bahnschrift'; font-size: 12px; font-weight: bold; padding: 6px 16px; border: 1px solid #ef4444; border-radius: 4px; }
+            QPushButton:hover { background-color: #3d1826; border-color: #ff808b; }
+        """)
+        self.btn_exit.clicked.connect(self.reject)
+        btn_layout.addWidget(self.btn_exit)
+
+        self.btn_submit = QtWidgets.QPushButton("INITIALIZE")
+        self.btn_submit.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+        self.btn_submit.setStyleSheet("""
+            QPushButton { background-color: #0d2b38; color: #00f5d4; font-family: 'Bahnschrift'; font-size: 12px; font-weight: bold; padding: 6px 16px; border: 1px solid #1e6b7b; border-radius: 4px; }
+            QPushButton:hover { background-color: #144254; border-color: #5eead4; }
+        """)
+        self.btn_submit.clicked.connect(self.accept)
+        btn_layout.addWidget(self.btn_submit)
+        
+        frame_layout.addLayout(btn_layout)
+        layout.addWidget(frame)
+
+def ensure_api_key():
+    """Prompts the user for an API key via an ATLAS-styled UI and matches .env.example syntax."""
+    from dotenv import load_dotenv
+    load_dotenv()
+    
+    if not os.getenv("GEMINI_API_KEY") and not os.getenv("GEMINI_API_KEYS"):
+        app = QtWidgets.QApplication.instance()
+        if not app:
+            fmt = QtGui.QSurfaceFormat()
+            fmt.setSamples(4)
+            QtGui.QSurfaceFormat.setDefaultFormat(fmt)
+            app = QtWidgets.QApplication(sys.argv)
+            
+        dialog = AtlasSetupDialog()
+        if dialog.exec() == QtWidgets.QDialog.DialogCode.Accepted:
+            key = dialog.key_input.text().strip()
+            if key:
+                # Exactly matching the .env.example syntax
+                env_content = f"""# 1. Single key or comma-separated keys for round-robin quota distribution
+GEMINI_API_KEY={key}
+# GEMINI_API_KEYS=key1,key2,key3
+
+# 2. Primary model & round-robin model rotation
+GEMINI_MODEL=gemini-3.1-flash-lite
+GEMINI_ROUND_ROBIN_MODELS=true
+
+# 3. Optional: Enable Vertex AI multi-region round-robin (requires GCP project)
+GEMINI_USE_VERTEX=false
+# GOOGLE_CLOUD_PROJECT=your-gcp-project-id
+# GEMINI_REGIONS=global,asia-south1,asia-southeast1,europe-west4
+"""
+                with open(".env", "w") as f:
+                    f.write(env_content)
+                os.environ["GEMINI_API_KEY"] = key
+            else:
+                sys.exit("Error: A Gemini API Key is required to start ATLAS.")
+        else:
+            sys.exit("ATLAS Initialization Cancelled.")
 
 class AtlasOperator:
     def __deepcopy__(self, memo):
@@ -484,5 +586,6 @@ class AtlasOperator:
 
 
 if __name__ == "__main__":
+    ensure_api_key()
     app = AtlasOperator()
     app.run()
