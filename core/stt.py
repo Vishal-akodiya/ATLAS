@@ -42,8 +42,9 @@ class STTEngine:
         return rms
 
     def calibrate_ambient(self, duration: float = 0.8):
-        """Measures baseline room/fan RMS once on startup without blocking the main thread."""
+        """Measures baseline room/fan RMS once on startup without crashing on busy devices."""
         with self.mic_lock:
+            stream = None
             try:
                 stream = self._pa.open(
                     format=pyaudio.paInt16,
@@ -57,14 +58,20 @@ class STTEngine:
                 for _ in range(num_frames):
                     data = stream.read(self.CHUNK, exception_on_overflow=False)
                     vals.append(self._compute_rms_and_Update_ui(data))
-                stream.stop_stream()
-                stream.close()
                 if vals:
                     vals.sort()
                     median_rms = vals[len(vals) // 2]
                     self.ambient_rms = max(120.0, min(median_rms, 900.0))
             except Exception as e:
-                print(f"[STT] Audio calibration skipped or failed: {e}")
+                print(f"[STT] Audio calibration safely skipped: {e}")
+                self.ambient_rms = 180.0
+            finally:
+                if stream is not None:
+                    try:
+                        stream.stop_stream()
+                        stream.close()
+                    except Exception:
+                        pass
 
     def capture_utterance(
         self,
@@ -149,25 +156,27 @@ class STTEngine:
                 stream.stop_stream()
                 stream.close()
 
-    def transcribe(self, audio: sr.AudioData) -> str:
-        """Recognize speech with a bounded network wait and language fallback."""
+    def transcribe(self, audio: sr.AudioData, language: Optional[str] = None) -> str:
+        """Recognize speech with optional fixed language for wake-word verification."""
+        if language:
+            try:
+                return self.recognizer.recognize_google(audio, language=language).strip()
+            except sr.UnknownValueError:
+                return ""
+
         last_unknown = None
-        # Use the user's most recently successful language first. This avoids
-        # always interpreting Hindi as English and avoids unnecessary extra calls.
         preferred = "hi-IN" if self.last_language == "hi" else "en-IN"
         alternatives = [preferred, "en-IN" if preferred == "hi-IN" else "hi-IN"]
-        for language in alternatives:
+        for lang in alternatives:
             try:
-                text = self.recognizer.recognize_google(audio, language=language)
+                text = self.recognizer.recognize_google(audio, language=lang)
                 if text and text.strip():
-                    self.last_language = "hi" if language == "hi-IN" else "en"
+                    self.last_language = "hi" if lang == "hi-IN" else "en"
                     return text.strip()
             except sr.UnknownValueError as exc:
                 last_unknown = exc
                 continue
             except sr.RequestError as exc:
-                # A request/network error should return control immediately;
-                # don't repeat the same recording against another locale.
                 raise RuntimeError(f"Speech recognition network/service error: {exc}") from exc
         if last_unknown:
             raise last_unknown

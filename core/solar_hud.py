@@ -1,26 +1,20 @@
 import math
 import random
 from PySide6 import QtCore, QtWidgets, QtGui
-from PySide6.QtOpenGLWidgets import QOpenGLWidget
 
-
-class AtomicSolarHUD(QOpenGLWidget):
+class AtomicSolarHUD(QtWidgets.QWidget):
     """Left-column 3D orbital hologram that reacts exclusively to the AI's voice (TTS)."""
-
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setMinimumSize(260, 260)
-
         self.raw_audio_level = 0.0
         self.smooth_audio_level = 0.0
         self.ai_sensitivity = 1.35
-
         self.base_time = 0.0
         self.orbit_time = 0.0
         self.track_time = 0.0
         self.plasma_time = 0.0
         self.dust_time = 0.0
-
         random.seed(42)
 
         self.wave_shell_particles = []

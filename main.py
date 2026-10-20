@@ -574,6 +574,12 @@ class AtlasOperator:
 
 
 if __name__ == "__main__":
+    # 1. Create the QApplication on the main thread before starting any subsystems
+    qt_app = QtWidgets.QApplication.instance()
+    if not qt_app:
+        qt_app = QtWidgets.QApplication(sys.argv)
+
+    # 2. Check for API key and initialize operator
     ensure_api_key()
-    app = AtlasOperator()
-    app.run()
+    operator = AtlasOperator()
+    operator.run()

@@ -1,45 +1,37 @@
 import sys
 import math
+import threading
 import numpy as np
 import sounddevice as sd
-
 from PySide6 import QtCore, QtWidgets, QtGui
-from PySide6.QtOpenGLWidgets import QOpenGLWidget
 
-
-class AudioSpectrumHUD(QOpenGLWidget):
-    """Top-center 3D liquid-silk plasma spectrum with exact mic dynamics and fine tapered ends."""
-
+class AudioSpectrumHUD(QtWidgets.QWidget):
+    """Top-center liquid-silk plasma spectrum with exact mic dynamics."""
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setMinimumHeight(175)
 
-        # -----------------------------------------------------------------
-        # AUDIO & TIME STATE (Matched to audio_spectrum_hud.py)
-        # -----------------------------------------------------------------
         self.raw_audio_level = 0.0
         self.smooth_audio_level = 0.0
         self.status_text = "Ready"
         self.status_color = QtGui.QColor(95, 200, 165, 235)
 
-        # TWEAK THESE IF NEEDED:
-        self.mic_sensitivity = 18.0   # Overall microphone gain multiplier
-        self.noise_gate = 0.004       # Ignores tiny background noises
-        self.idle_amplitude = 0.72    # Baseline wave height when silent
+        self.mic_sensitivity = 18.0
+        self.noise_gate = 0.004
+        self.idle_amplitude = 0.72
 
-        # Number of discrete frequency bins per side
         self.bars_per_side = 68
         self.raw_fft_bins = np.zeros(self.bars_per_side, dtype=np.float32)
         self.smooth_fft_bins = np.zeros(self.bars_per_side, dtype=np.float32)
+        self._fft_lock = threading.Lock()
 
-        # Separate monotonic clocks so waves never reverse when volume drops
         self.base_time = 0.0
         self.phase_time = 0.0
-
         self.audio_stream = None
-        self.init_audio_stream()
 
-        # 60 FPS Render Loop
+        # Delay opening the secondary stream slightly so STTEngine finishes calibration first
+        QtCore.QTimer.singleShot(1000, self.init_audio_stream)
+
         self.timer = QtCore.QTimer(self)
         self.timer.timeout.connect(self.update_animation)
         self.timer.start(16)
@@ -51,21 +43,19 @@ class AudioSpectrumHUD(QOpenGLWidget):
             )
             self.audio_stream.start()
         except Exception as e:
-            print(f"[AudioSpectrumHUD] Mic stream fallback active: {e}")
+            # If the microphone is in use by PyAudio, fall back to push_external_mic_levels safely
+            print(f"[AudioSpectrumHUD] Hardware stream deferred/busy: {e}. Using STT visualizer bridge.")
             self.audio_stream = None
 
     def _audio_callback(self, indata, frames, time_info, status):
         mono = indata[:, 0]
         rms = float(np.sqrt(np.mean(mono ** 2)))
-
         if rms < self.noise_gate:
-            self.raw_audio_level = 0.0
-            self.raw_fft_bins.fill(0.0)
+            with self._fft_lock:
+                self.raw_audio_level = 0.0
+                self.raw_fft_bins.fill(0.0)
             return
 
-        self.raw_audio_level = rms
-
-        # Compute windowed FFT magnitude for real-time frequency-band reactivity
         windowed = mono * np.hanning(len(mono))
         fft_mag = np.abs(np.fft.rfft(windowed))
         useful_bins = fft_mag[1:min(len(fft_mag), 150)]
@@ -75,25 +65,52 @@ class AudioSpectrumHUD(QOpenGLWidget):
                 np.arange(len(useful_bins)),
                 useful_bins
             )
-            self.raw_fft_bins = np.clip(resampled * (self.mic_sensitivity * 0.45), 0.0, 1.5)
+            with self._fft_lock:
+                self.raw_audio_level = rms
+                self.raw_fft_bins = np.clip(resampled * (self.mic_sensitivity * 0.45), 0.0, 1.5)
 
     def push_external_mic_levels(self, levels: list[float]):
-        """Fallback feed from PyAudio STTEngine so the spectrum stays reactive during voice capture."""
         if not levels:
             return
         avg = sum(levels) / len(levels)
-        if avg > self.raw_audio_level:
-            self.raw_audio_level = avg * 0.08
-            resampled = np.interp(
-                np.linspace(0, len(levels) - 1, self.bars_per_side),
-                np.arange(len(levels)),
-                levels,
-            )
-            self.raw_fft_bins = np.clip(resampled * 1.2, 0.0, 1.5)
+        resampled = np.interp(
+            np.linspace(0, len(levels) - 1, self.bars_per_side),
+            np.arange(len(levels)),
+            levels,
+        )
+        with self._fft_lock:
+            if avg > self.raw_audio_level or self.audio_stream is None:
+                self.raw_audio_level = avg * 0.08
+                self.raw_fft_bins = np.clip(resampled * 1.2, 0.0, 1.5)
+
+    def update_animation(self):
+        self.base_time += 0.016
+        with self._fft_lock:
+            target = min(1.0, self.raw_audio_level * self.mic_sensitivity)
+            current_raw_fft = self.raw_fft_bins.copy()
+
+        if target > self.smooth_audio_level:
+            self.smooth_audio_level += (target - self.smooth_audio_level) * 0.45
+        else:
+            self.smooth_audio_level += (target - self.smooth_audio_level) * 0.09
+
+        fft_diff = current_raw_fft - self.smooth_fft_bins
+        attack_mask = fft_diff > 0
+        self.smooth_fft_bins[attack_mask] += fft_diff[attack_mask] * 0.50
+        self.smooth_fft_bins[~attack_mask] += fft_diff[~attack_mask] * 0.12
+
+        if self.audio_stream is None:
+            with self._fft_lock:
+                self.raw_audio_level *= 0.92
+                self.raw_fft_bins *= 0.90
+
+        self.phase_time += 0.016 * (1.0 + self.smooth_audio_level * 2.2)
+        self.update()
 
     def set_status_display(self, text: str, hex_color: str = "#10b981"):
         self.status_text = text
         self.status_color = QtGui.QColor(hex_color)
+        self.update()  # Forces PySide6 OpenGL canvas to redraw the label immediately
 
     def closeEvent(self, event):
         if hasattr(self, "audio_stream") and self.audio_stream:
