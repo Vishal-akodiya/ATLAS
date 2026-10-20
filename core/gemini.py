@@ -15,10 +15,10 @@ load_dotenv()
 # Weighted fast model pool (favors low-latency Flash-Lite / Flash models)
 MODEL_FAILOVER_POOL = [
     "gemini-3.1-flash-lite",
-    "gemini-3.1-flash-lite",
     "gemini-3.5-flash-lite",
-    "gemini-3.6-flash",
     "gemini-3.8-flash",
+    "gemini-3.6-flash",
+    "gemini-2.5-flash",
 ]
 
 # Default Vertex AI regions (only used if GEMINI_USE_VERTEX=true in .env)
@@ -183,22 +183,35 @@ class GeminiEngine:
 
     def _select_relevant_tools(self, prompt: str, with_screen: bool = False) -> list:
         p = prompt.lower()
-        selected = ["get_current_time"]
+        # Core autonomous desktop & vision tools are always available so ATLAS can
+        # dynamically find, launch, focus, inspect, and control any app for any task.
+        selected = [
+            "get_current_time",
+            "list_open_windows",
+            "list_installed_apps",
+            "open_app",
+            "focus_window",
+            "minimize_window",
+            "close_app",
+            "check_app_running",
+            "inspect_screen_state",
+            "locate_and_interact_on_screen",
+            "type_text",
+            "press_hotkey",
+            "click_control",
+            "scroll_screen",
+        ]
 
-        if with_screen or any(w in p for w in ("screen", "click", "button", "locate", "look", "type", "window", "scroll", "key", "shortcut")):
-            selected.extend(["inspect_screen_state", "locate_and_interact_on_screen", "type_text", "press_hotkey", "click_control", "scroll_screen", "focus_window"])
-        if any(w in p for w in ("open", "launch", "start", "app", "whatsapp", "close", "minimize")):
-            selected.extend(["open_app", "list_installed_apps", "send_whatsapp_message", "focus_window", "minimize_window", "close_app"])
         if any(w in p for w in ("file", "note", "document", "read", "write", "save", "folder", "duplicate", "compare", "delete", "move", "rename", "undo")):
             selected.extend(["search_files", "read_document", "create_file", "move_file", "compare_documents", "find_duplicates_or_large_files", "delete_file", "undo_last_action"])
-        if any(w in p for w in ("remind", "task", "schedule", "todo", "snooze", "overdue", "tomorrow", "briefing")):
+        if any(w in p for w in ("remind", "task", "schedule", "todo", "snooze", "overdue", "tomorrow", "briefing", "timer", "alarm")):
             selected.extend(["create_task", "list_tasks", "snooze_task", "reschedule_task", "cancel_task", "generate_daily_briefing"])
-        if any(w in p for w in ("search", "web", "wikipedia", "google", "research", "url", "http", "page", "website")):
+        if any(w in p for w in ("search", "web", "wikipedia", "google", "research", "url", "http", "page", "website", "browser")):
             selected.extend(["web_search", "extract_webpage_text", "open_page"])
         if any(w in p for w in ("remember", "memory", "preference", "forget", "recall", "checkpoint", "resume")):
             selected.extend(["save_user_memory", "search_user_memory", "delete_user_memory", "save_task_checkpoint"])
-        if any(w in p for w in ("email", "draft", "calendar", "event", "meeting", "message", "team")):
-            selected.extend(["draft_email", "prepare_calendar_event", "send_message", "send_whatsapp_message"])
+        if any(w in p for w in ("email", "draft", "calendar", "event", "meeting")):
+            selected.extend(["draft_email", "prepare_calendar_event", "send_message"])
         if any(w in p for w in ("cpu", "ram", "disk", "system", "status", "running", "log", "command", "ipconfig")):
             selected.extend(["check_system_status", "check_app_running", "read_logs", "run_approved_command"])
 
@@ -216,6 +229,15 @@ class GeminiEngine:
             base_kwargs["system_instruction"] = self.system_prompt
         if tools:
             base_kwargs["tools"] = tools
+            # Allow up to 12 sequential tool calls so the agent can find an app,
+            # open/focus it, inspect the screen, and complete multi-step GUI tasks.
+            if hasattr(types, "AutomaticFunctionCallingConfig"):
+                try:
+                    base_kwargs["automatic_function_calling"] = types.AutomaticFunctionCallingConfig(
+                        maximum_remote_calls=12
+                    )
+                except Exception:
+                    pass
         if disable_thinking and hasattr(types, "ThinkingConfig"):
             try:
                 base_kwargs["thinking_config"] = types.ThinkingConfig(thinking_budget=0)

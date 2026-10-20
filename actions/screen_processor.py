@@ -88,88 +88,8 @@ class ScreenProcessor:
         except Exception:
             return None
 
-    def visual_send_whatsapp(self, contact_name: str, message_text: str) -> str:
-        if self.desktop.emergency_stop_event.is_set():
-            return "STOPPED: Automation halted."
-
-        if self.on_action_status:
-            self.on_action_status("Focusing WhatsApp window...")
-        focus_res = self.desktop.focus_window("WhatsApp")
-        if "FAILED" in focus_res:
-            self.desktop.open_app("WhatsApp")
-            time.sleep(2.0)
-            self.desktop.focus_window("WhatsApp")
-
-        time.sleep(0.5)
-
-        if self.on_action_status:
-            self.on_action_status("Locating chats search bar...")
-        search_coords = self._locate_element_coords(
-            "The search bar or input field at the top of the left WhatsApp chats sidebar"
-        )
-        if not search_coords:
-            sw, sh = pyautogui.size()
-            search_coords = (int(sw * 0.16), int(sh * 0.12))
-
-        pyautogui.click(search_coords[0], search_coords[1])
-        time.sleep(0.2)
-        pyautogui.hotkey("ctrl", "a")
-        time.sleep(0.1)
-        pyautogui.press("backspace")
-        time.sleep(0.1)
-
-        self.desktop._paste_via_clipboard(contact_name)
-        time.sleep(1.8)
-
-        if self.on_action_status:
-            self.on_action_status(f"Selecting contact '{contact_name}'...")
-        contact_coords = self._locate_element_coords(
-            f"The search result item row labeled '{contact_name}' in the left sidebar"
-        )
-
-        if contact_coords:
-            pyautogui.click(contact_coords[0], contact_coords[1])
-        else:
-            pyautogui.press("down")
-            time.sleep(0.2)
-            pyautogui.press("enter")
-
-        time.sleep(1.0)
-
-        if self.on_action_status:
-            self.on_action_status("Locating message box...")
-        msg_box_coords = self._locate_element_coords(
-            "The message text input box at the bottom of the active WhatsApp conversation"
-        )
-
-        if not msg_box_coords:
-            sw, sh = pyautogui.size()
-            msg_box_coords = (int(sw * 0.58), int(sh * 0.94))
-
-        pyautogui.click(msg_box_coords[0], msg_box_coords[1])
-        time.sleep(0.2)
-
-        self.desktop._paste_via_clipboard(message_text)
-        time.sleep(0.2)
-        pyautogui.press("enter")
-
-        time.sleep(0.5)
-        if self.on_action_status:
-            self.on_action_status("Verifying message sent...")
-
-        verify_img, _, _ = self.capture_raw_screen(hide_atlas=True)
-        img = Image.open(verify_img)
-
-        try:
-            v_prompt = f"Did a message containing '{message_text[:30]}' get sent in this chat? Answer in 1 sentence."
-            verdict = self.gemini.generate_vision_content(v_prompt, img, temperature=0.1)
-        except Exception:
-            verdict = f"Dispatched to {contact_name}."
-
-        self.memory.log_audit("visual_send_whatsapp", 1, "VERIFIED", f"To: {contact_name}")
-        return f"VERIFIED: Opened chat, typed message, and sent. {verdict}"
-
-    def inspect_screen_state(self, question_or_goal: str = "Describe active windows.") -> str:
+    def inspect_screen_state(self, question_or_goal: str = "Describe active windows and interactive controls.") -> str:
+        """Captures a live screenshot and analyzes the active application window, UI layout, text fields, and buttons to determine the next action for the user's goal."""
         if self.on_action_status:
             self.on_action_status("Analyzing screen...")
         img_path, screen_w, screen_h = self.capture_raw_screen(hide_atlas=True)
@@ -180,22 +100,27 @@ class ScreenProcessor:
         return f"VERIFIED Screen Analysis:\n{summary}"
 
     def locate_and_interact_on_screen(
-        self, element_description: str, interaction_type: str = "click", text_to_type: str = "", press_enter: bool = False
+        self,
+        element_description: str,
+        interaction_type: str = "click",
+        text_to_type: str = "",
+        press_enter: bool = False,
     ) -> str:
+        """Visually locates any UI element on the current screen (e.g., search bar, contact row, play button, text input box) and interacts with it.
+        interaction_type: 'click', 'double_click', 'right_click', or 'move_only'.
+        text_to_type: Optional text to paste/type after clicking the element.
+        press_enter: Set True to press Enter after clicking or typing."""
         if self.desktop.emergency_stop_event.is_set():
             return "STOPPED."
         if self.on_action_status:
             self.on_action_status(f"Locating: '{element_description}'...")
-
         coords = self._locate_element_coords(element_description)
         if not coords:
             return f"FAILED: Could not find '{element_description}'."
-
         tx, ty = coords
         if self.hide_ui_cb:
             self.hide_ui_cb()
             time.sleep(0.08)
-
         try:
             pyautogui.moveTo(tx, ty, duration=0.18)
             itype = interaction_type.strip().lower()
@@ -205,7 +130,6 @@ class ScreenProcessor:
                 pyautogui.rightClick(tx, ty)
             elif itype != "move_only":
                 pyautogui.click(tx, ty)
-
             if text_to_type:
                 time.sleep(0.2)
                 self.desktop._paste_via_clipboard(text_to_type)
@@ -219,6 +143,5 @@ class ScreenProcessor:
             time.sleep(0.1)
             if self.show_ui_cb:
                 self.show_ui_cb()
-
         self.memory.log_audit("interact", 1, "VERIFIED", f"{interaction_type} @ ({tx},{ty})")
         return f"VERIFIED: Interacted with '{element_description}' at ({tx}, {ty})."

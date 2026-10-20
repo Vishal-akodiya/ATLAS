@@ -328,17 +328,6 @@ class AtlasOperator:
         if quick_reminder:
             return quick_reminder
 
-        wa_match = re.search(
-            r"(?:send\s+(?:a\s+)?(?:whatsapp\s+)?(?:message\s+)?to|whatsapp)\s+([a-zA-Z0-9_ \-]+?)\s+(?:saying|that|message|:)\s+(.+)$",
-            clean,
-            flags=re.IGNORECASE,
-        )
-        if wa_match and "whatsapp" in low:
-            contact = wa_match.group(1).strip()
-            msg_body = wa_match.group(2).strip().strip("\"'")
-            res = self.screen_processor.visual_send_whatsapp(contact, msg_body)
-            return f"**{res}**"
-
         if " and " not in low:
             open_match = re.match(r"^(?:please\s+)?(?:open|launch|start)\s+([a-zA-Z0-9_ \-\.]+)$", clean, flags=re.IGNORECASE)
             if open_match:
@@ -357,7 +346,6 @@ class AtlasOperator:
             return self.reminder_actions.list_tasks()
         if low in ("undo", "undo last action", "undo that"):
             return f"**{self.undo.undo_last()}**"
-
         return None
 
     def get_current_time(self) -> str:
@@ -399,7 +387,7 @@ class AtlasOperator:
             self.screen_processor.locate_and_interact_on_screen,
             self.desktop_actions.open_app,
             self.desktop_actions.list_installed_apps,
-            self.desktop_actions.send_whatsapp_message,
+            self.desktop_actions.list_open_windows,
             self.desktop_actions.focus_window,
             self.desktop_actions.minimize_window,
             self.desktop_actions.type_text,
@@ -520,8 +508,8 @@ class AtlasOperator:
 
     def handle_voice_command(self, transcript: str):
         self.ui.update_input_box(transcript)
-        self.ui.set_status("Command captured · processing…", "#f59e0b", True)
-        screen_keywords = ("screen", "click", "button", "window", "type here", "look at", "whatsapp")
+        self.ui.set_status("Command captured - processing", "#f59e0b", True)
+        screen_keywords = ("screen", "click", "button", "window", "type here", "look at", "select", "search bar")
         needs_screen = any(kw in transcript.lower() for kw in screen_keywords) or (self.ui.operator_mode == "VISION")
         prefix = "[Vision] " if needs_screen else "[Voice] "
         self.ui.add_user_bubble(f"{prefix}{transcript}")

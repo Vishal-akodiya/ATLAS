@@ -94,7 +94,29 @@ class DesktopActions:
     # ==========================================
     # WINDOW FOCUSING & APP LAUNCHER
     # ==========================================
+    def list_open_windows(self) -> str:
+        """Lists all currently visible application windows on the desktop so you can focus the right window or decide if an app needs to be launched."""
+        titles = []
+
+        def enum_cb(hwnd, _):
+            if user32.IsWindowVisible(hwnd):
+                length = user32.GetWindowTextLengthW(hwnd)
+                if length > 0:
+                    buf = ctypes.create_unicode_buffer(length + 1)
+                    user32.GetWindowTextW(hwnd, buf, length + 1)
+                    title = buf.value.strip()
+                    if title and title not in titles:
+                        titles.append(title)
+            return True
+
+        WNDENUMPROC = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_int, ctypes.c_int)
+        user32.EnumWindows(WNDENUMPROC(enum_cb), 0)
+        if not titles:
+            return "No visible application windows found."
+        return "Open Windows:\n" + "\n".join(f"- {t}" for t in titles[:35])
+
     def focus_window(self, title_substring: str) -> str:
+        """Brings an already-open application window matching title_substring to the foreground."""
         matched_hwnd = []
 
         def enum_cb(hwnd, _):
@@ -176,6 +198,7 @@ class DesktopActions:
         self.installed_apps = apps
 
     def list_installed_apps(self, search_filter: str = "") -> str:
+        """Searches installed desktop and Microsoft Store applications matching search_filter."""
         if not self.installed_apps:
             self._index_installed_apps()
         names = sorted({info["name"] for info in self.installed_apps.values()})
@@ -186,6 +209,7 @@ class DesktopActions:
         return f"Found {len(names)} installed apps: {', '.join(names[:40])}"
 
     def open_app(self, app_name: str) -> str:
+        """Finds and launches any installed application by name (e.g., Spotify, Discord, Notepad, Chrome, WhatsApp, VS Code) and brings its window to the front."""
         query = app_name.strip().lower()
         if not query: return "FAILED: App name is empty."
         if not self.installed_apps: self._index_installed_apps()
@@ -232,20 +256,18 @@ class DesktopActions:
             return f"FAILED to open '{app_name}': {e}"
 
     def type_text(self, text: str, press_enter: bool = False) -> str:
-        if self.emergency_stop_event.is_set(): return "STOPPED."
-        self._notify(f"⌨️ Entering text: '{text[:30]}'...")
+        """Types or pastes text into the currently focused input field, optionally pressing Enter afterward."""
+        if self.emergency_stop_event.is_set():
+            return "STOPPED."
+        self._notify(f"Entering text: '{text[:30]}'...")
         self._paste_via_clipboard(text)
         if press_enter:
             time.sleep(0.1)
             pyautogui.press("enter")
         return f"VERIFIED: Entered '{text}'"
-
-    def send_whatsapp_message(self, contact_name: str, message_text: str) -> str:
-        if self.screen_processor:
-            return self.screen_processor.visual_send_whatsapp(contact_name, message_text)
-        return "FAILED: Screen Vision Processor is not attached."
-
+    
     def minimize_window(self, title_substring: str) -> str:
+        """Minimizes a visible window matching title_substring."""
         matched_hwnd = []
 
         def enum_cb(hwnd, _):
@@ -269,6 +291,7 @@ class DesktopActions:
         return f"VERIFIED: Minimized window '{full_title}'."
 
     def press_hotkey(self, keys_csv: str) -> str:
+        """Presses a keyboard key or shortcut combination (e.g., 'ctrl+f', 'ctrl+n', 'enter', 'tab', 'space')."""
         if self.emergency_stop_event.is_set(): return "STOPPED."
         keys = [k.strip().lower() for k in keys_csv.replace("+", ",").split(",") if k.strip()]
         self._notify(f"⌨️ Shortcut: {'+'.join(keys).upper()}")
@@ -283,6 +306,7 @@ class DesktopActions:
         return f"VERIFIED: Pressed {'+'.join(keys)}."
 
     def click_control(self, x: int, y: int, button: str = "left", double: bool = False) -> str:
+        """Clicks specific screen pixel coordinates (x, y)."""
         if self.emergency_stop_event.is_set(): return "STOPPED."
         pyautogui.moveTo(int(x), int(y), duration=0.2)
         if double: pyautogui.doubleClick(x=int(x), y=int(y), button=button)
@@ -290,11 +314,13 @@ class DesktopActions:
         return f"VERIFIED: Clicked ({x}, {y})."
 
     def scroll_screen(self, direction: str = "down", clicks: int = 5) -> str:
+        """Scrolls the active window 'up' or 'down'."""
         amt = -abs(int(clicks)) * 120 if direction.lower() == "down" else abs(int(clicks)) * 120
         pyautogui.scroll(amt)
         return f"VERIFIED: Scrolled {direction}."
 
     def close_app(self, process_name: str) -> str:
+        """Closes/terminates a running application process after user confirmation."""
         appr, rsn = self.confirm.request_approval("Close Application", process_name, "Active Processes", "Data may be lost", 2)
         if not appr: return f"CANCELLED: {rsn}"
         for proc in psutil.process_iter(["name"]):
